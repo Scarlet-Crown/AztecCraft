@@ -1583,10 +1583,8 @@ fn remote_successes_report_on_the_status_line_like_native_ones() {
     let steps: Vec<fn(&Editor) -> Operation> = vec![
         |_| Operation::Create {
             primitive: Primitive::Cube,
-            name: Some("pCube1".to_string()),
-            options: None,
-            options: None,
             name: None,
+            options: None,
         },
         |editor| Operation::Rename {
             id: editor.selected.unwrap(),
