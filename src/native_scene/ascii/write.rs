@@ -28,8 +28,8 @@ const FACE_ROW_BYTES: usize = "\tf \n".len() + "2147483647".len() + 1;
 const FACE_TOKEN_BYTES: usize = " -2147483648".len();
 const ARRAY_END: &[u8] = b";\n";
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum AsciiWriteRefusal {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AsciiWriteRefusal {
     SourcedScene,
     Curves,
     InvalidScene(NativeError),
@@ -398,7 +398,6 @@ fn append(out: &mut Vec<u8>, admitted: usize, bytes: &[u8]) -> Result<(), AsciiW
     Ok(())
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "no Editor caller yet"))]
 pub(crate) fn emit_geometry_prefix(scene: &NativeScene) -> Result<Vec<u8>, AsciiWriteRefusal> {
     check(scene)?;
     let length = prefix_bytes(scene)?;

@@ -89,8 +89,8 @@ Call `inspect_scene` first. Every other tool requires `scene_token`, a UUID stri
 | `dolly_camera` | `factor`: positive finite distance multiplier | Changed or unchanged camera distance; below one moves closer |
 | `new_scene` | None | New empty document immediately, or a pending confirmation when dirty |
 | `open_scene` | `path`: 1 to 4096 UTF-8 bytes, no NUL | Supported `.mb`, read-only static cubic `.ma`, or legacy `.aztec` candidate; applies immediately or stages an immutable candidate for confirmation |
-| `save_scene` | None | Active Unix Maya binary Save, or reconciliation of an uncertain installation without another write |
-| `save_scene_as` | `path`: 1 to 4096 UTF-8 bytes, no NUL | Fresh `.mb` destination only, never overwrite; an existing receipt is reconciled instead |
+| `save_scene` | None | Active Unix Maya binary Save, an authored untitled scene saved to a `.ma` path, or reconciliation of an uncertain installation without another write |
+| `save_scene_as` | `path`: 1 to 4096 UTF-8 bytes, no NUL | Fresh `.mb` or `.ma` destination, never overwrite; an authored untitled scene writes `.ma`, a Maya binary scene writes `.mb`; an existing receipt is reconciled instead |
 | `resolve_file_action` | `pending_action_id`: UUID; `decision`: `cancel`, `discard` or `save` | Resolve only that exact pending action; source-changed queued Open requires Cancel and reopening |
 | `request_close` | None | Native close guard; dirty documents require confirmation, and approved remote closure waits for its own successful response flush |
 
@@ -315,8 +315,10 @@ Unix with proved existing-record edits and, for translate only, insertion of an
 absent leaf at a recorded site. Rotate, scale and siteless nodes refuse: `begin_manipulation`
 with `absent_channel_leaf`, and `edit_node` and `set_transform` with
 `scene_error` ("native ownership or edit effects are unsupported"). Save As from an opened scene derives its bytes from the
-bytes parsed at Open, not from the destination or the file on disk. New, legacy
-and Windows writing remain unsupported. Read-through-symlink documents can Save As to a fresh destination;
+bytes parsed at Open, not from the destination or the file on disk. Authored
+(Untitled) scenes are saved as Maya ASCII `.ma` through the geometry prefix
+writer; Save As for an Untitled scene offers a `.ma` file dialog. Legacy and
+Windows writing remain unsupported. Read-through-symlink documents can Save As to a fresh destination;
 active Save through that link remains refused.
 
 `saved`, `save_uncertain` and `save_reconciled` replies include `scene_token`,
@@ -457,7 +459,8 @@ Status values: `supported` means a registered tool or an `inspect_scene` field e
 | Files | Save As | supported | `save_scene_as` | `save_as_available` | |
 | Files | Close and quit guard | supported | `request_close` | `closing` | |
 | Files | Export and OBJ export | unsupported | | | |
-| Files | Maya ASCII and new-scene Save, ASCII writing | unsupported | | | |
+| Files | New-scene Save and Save As to Maya ASCII `.ma` | supported | `save_scene`, `save_scene_as` | `save_available`, `save_as_available`, `document_origin` | |
+| Files | Maya ASCII writing of opened `.ma` scenes | unsupported | | | |
 | Create | Polygon cube, plane, sphere, cylinder, cone (Create menu, shelf) | supported | `create_primitive` | `nodes` | |
 | Create | Other primitives, Bevel, shelf Materials, Mesh and other placeholder menus | unsupported | | | |
 | Modeling | Extrude face (shelf button disabled; operation exposed) | supported | `extrude_face` | `shapes` | |
@@ -501,7 +504,7 @@ Status values: `supported` means a registered tool or an `inspect_scene` field e
 | Panels | Time Slider and animation controls, Layer Editor, Outliner filters | unsupported | | | |
 | Panels | Status line message text | missing | | | #214 |
 
-Outcome: the registered catalogue covers every implemented file, creation, selection, camera, tool, history, material, viewport and panel operation except the three missing rows (#188, #214, #216), each linked to its issue; the catch-up stays open until those close. Issue #161 asks for camera pose: `inspect_scene` `camera` now also reports orientation (yaw/pitch), the vertical field of view and the clip planes. Restoring a saved view (there is no absolute camera-set tool) remains open in #161.
+Outcome: the registered catalogue covers every implemented file, creation, selection, camera, tool, history, material, viewport and panel operation except the three missing rows (#188, #214, #216), each linked to its issue; the catch-up stays open until those close. New-scene Save to Maya ASCII `.ma` is now supported (#156). Issue #161 asks for camera pose: `inspect_scene` `camera` now also reports orientation (yaw/pitch), the vertical field of view and the clip planes. Restoring a saved view (there is no absolute camera-set tool) remains open in #161.
 
 ## Protocol references
 

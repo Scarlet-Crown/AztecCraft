@@ -1,5 +1,8 @@
 use super::{NativeOrigin, NativeScene};
-use crate::native_scene::binary;
+use crate::native_scene::{
+    ascii::write::AsciiWriteRefusal,
+    binary,
+};
 use std::{
     fmt, io,
     path::{Path, PathBuf},
@@ -15,7 +18,7 @@ pub enum SaveDestination<'a> {
     As(&'a Path),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NativeSaveError {
     Unsupported,
     InvalidDestination,
@@ -24,6 +27,7 @@ pub enum NativeSaveError {
     Cancelled,
     Io(io::ErrorKind),
     Encode(binary::BinaryError),
+    AsciiWrite(AsciiWriteRefusal),
 }
 
 impl fmt::Display for NativeSaveError {
@@ -38,6 +42,7 @@ impl fmt::Display for NativeSaveError {
             Self::Cancelled => f.write_str("save cancelled before installation"),
             Self::Io(kind) => write!(f, "native scene IO failed: {kind:?}"),
             Self::Encode(error) => error.fmt(f),
+            Self::AsciiWrite(error) => error.fmt(f),
         }
     }
 }
@@ -99,7 +104,14 @@ pub fn save_native(
 ) -> Result<SaveOutcome, NativeSaveError> {
     #[cfg(unix)]
     {
-        unix::save_native(origin, scene, destination, may_install)
+        match origin {
+            NativeOrigin::Untitled | NativeOrigin::AuthoredAscii(_) => {
+                unix::save_authored(origin, scene, destination, may_install)
+            }
+            _ => {
+                unix::save_native(origin, scene, destination, may_install)
+            }
+        }
     }
     #[cfg(not(unix))]
     {
