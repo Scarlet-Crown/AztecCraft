@@ -241,32 +241,25 @@ pub(in crate::app) fn option_box(
     reason: Option<&str>,
 ) -> egui::Response {
     let side = ui.spacing().interact_size.y;
-    let sense = if enabled {
-        egui::Sense::click()
-    } else {
-        egui::Sense::hover()
-    };
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), sense);
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    if ui.is_rect_visible(rect) {
-        let visuals = ui.style().interact_selectable(&response, false);
-        let color = if enabled {
-            visuals.fg_stroke.color
-        } else {
-            ui.visuals()
-                .widgets
-                .noninteractive
-                .fg_stroke
-                .color
-                .gamma_multiply(0.5)
-        };
-        ui.painter().rect_stroke(
-            rect.shrink(side * 0.28),
-            1.0,
-            egui::Stroke::new(1.5, color),
-            egui::StrokeKind::Inside,
-        );
-    }
+    let response = ui
+        .add_enabled_ui(enabled, |ui| {
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+            response.widget_info(|| {
+                egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label)
+            });
+            if ui.is_rect_visible(rect) {
+                let visuals = ui.style().interact_selectable(&response, false);
+                ui.painter().rect_stroke(
+                    rect.shrink(side * 0.28),
+                    1.0,
+                    egui::Stroke::new(1.5, visuals.fg_stroke.color),
+                    egui::StrokeKind::Inside,
+                );
+            }
+            response
+        })
+        .inner;
     match (enabled, reason) {
         (false, Some(reason)) => response.on_disabled_hover_text(reason),
         (true, _) => response.on_hover_text(label),
@@ -303,6 +296,7 @@ impl Editor {
     /// a field being typed in take the key first (the existing cancel path runs for them).
     pub(in crate::app) fn escape_closes_primitive_options(&mut self, ctx: &egui::Context) -> bool {
         let closes = self.primitive_options.dialog.is_some()
+            && !self.files.is_closing()
             && !self.primitive_options.typing
             && !self.has_draft()
             && self.history.active_manipulation().is_none()
@@ -310,6 +304,7 @@ impl Editor {
             && ctx.input(|input| input.key_pressed(Key::Escape));
         if closes {
             self.primitive_options.dialog = None;
+            self.consume_pointer_sequence();
         }
         closes
     }
@@ -411,10 +406,13 @@ fn dialog_body(ui: &mut egui::Ui, dialog: &mut Dialog, read_only: Option<&str>) 
     for (label, reason) in [
         (
             "Interactive creation",
-            "Interactive creation is not implemented",
+            crate::app::menus::INTERACTIVE_CREATION_REASON,
         ),
         ("Create UVs", "Meshes have no UVs yet"),
-        ("Exit on completion", "Only applies to interactive creation"),
+        (
+            "Exit on completion",
+            crate::app::menus::EXIT_ON_COMPLETION_REASON,
+        ),
     ] {
         ui.add_enabled(false, egui::Checkbox::new(&mut false, label))
             .on_disabled_hover_text(reason);

@@ -1,10 +1,10 @@
 //! Rotate and Scale: Tool Box state, Object/World selector, numeric entry, handle hover, pick and
 //! paint. The drag samples, guards and history entry are shared with Move (`move_tool.rs`).
 
-use crate::app::Editor;
+use crate::app::{Editor, NOT_IMPLEMENTED_YET};
 use crate::editor_operations::{
     ActiveTool, ManipulationSpace, ManipulationValue, Operation, OperationError, OperationReply,
-    SelectionMode,
+    SelectionMode, ToolHandle,
 };
 use azteccraft::{
     history::{
@@ -15,7 +15,7 @@ use azteccraft::{
         HandleFrame, RotateDrag, RotateHandles, ScaleDrag, ScaleHandles,
         paint::{paint_rotate, paint_scale},
     },
-    move_handles::{HandleError, ViewportCapture},
+    move_handles::{HandleError, ManipulatorSize, ViewportCapture},
     native_scene::{RotateAxis, ScaleHandle, TransformTarget},
 };
 use eframe::egui;
@@ -30,6 +30,8 @@ pub(in crate::app) struct ManipulationOptions {
     scale_space: ManipulationSpace,
     rotate_axis: RotateAxis,
     scale_handle: ScaleHandle,
+    // Global and session-only: it never enters the scene, the history or the dirty state.
+    manipulator_size: ManipulatorSize,
     numeric: String,
     // The status text last written for the handle under the pointer, and whether it is a refusal.
     hover: Option<(String, bool)>,
@@ -51,6 +53,7 @@ impl Default for ManipulationOptions {
             scale_space: ManipulationSpace::World,
             rotate_axis: RotateAxis::X,
             scale_handle: ScaleHandle::Uniform,
+            manipulator_size: ManipulatorSize::default(),
             numeric: String::new(),
             hover: None,
             quiet: false,
@@ -66,6 +69,18 @@ impl ManipulationOptions {
             ActiveTool::Scale => self.scale_space,
             _ => self.rotate_space,
         }
+    }
+
+    pub(in crate::app) fn rotate_axis(&self) -> RotateAxis {
+        self.rotate_axis
+    }
+
+    pub(in crate::app) fn scale_handle(&self) -> ScaleHandle {
+        self.scale_handle
+    }
+
+    pub(in crate::app) fn manipulator_size(&self) -> ManipulatorSize {
+        self.manipulator_size
     }
 }
 
@@ -92,6 +107,34 @@ impl Editor {
         } else {
             OperationReply::Unchanged
         })
+    }
+}
+
+impl Editor {
+    pub(in crate::app) fn set_tool_handle(&mut self, handle: ToolHandle) -> OperationReply {
+        let changed = match handle {
+            ToolHandle::RotateAxis(axis) => {
+                std::mem::replace(&mut self.manipulation.rotate_axis, axis) != axis
+            }
+            ToolHandle::ScaleHandle(handle) => {
+                std::mem::replace(&mut self.manipulation.scale_handle, handle) != handle
+            }
+        };
+        if changed {
+            OperationReply::Changed
+        } else {
+            OperationReply::Unchanged
+        }
+    }
+}
+
+impl Editor {
+    pub(in crate::app) fn set_manipulator_size(&mut self, size: ManipulatorSize) -> OperationReply {
+        if std::mem::replace(&mut self.manipulation.manipulator_size, size) == size {
+            OperationReply::Unchanged
+        } else {
+            OperationReply::Changed
+        }
     }
 }
 
@@ -611,7 +654,7 @@ impl Editor {
         let drawn = (|| {
             let (_, frame) = self.manipulation_frame(tool)?;
             let capture = input
-                .move_capture(&self.camera)
+                .move_capture(&self.camera, self.manipulation.manipulator_size())
                 .map_err(|error| handle_error(tool, error))?;
             let pointer = input
                 .move_pointer()
@@ -706,6 +749,7 @@ impl Editor {
         }
         let mut apply = false;
         let mut chosen = None;
+        let mut chosen_handle = None;
         ui.horizontal(|ui| {
             ui.label(format!("{} tool", tool_name(tool)));
             ui.add_enabled_ui(enabled, |ui| {
@@ -723,24 +767,28 @@ impl Editor {
                         }
                         for name in UNSUPPORTED_SPACES {
                             ui.add_enabled(false, egui::Button::selectable(false, name))
-                                .on_disabled_hover_text("unsupported");
+                                .on_disabled_hover_text(NOT_IMPLEMENTED_YET);
                         }
                     });
                 if tool == ActiveTool::Rotate {
                     egui::ComboBox::from_id_salt("manipulation_axis")
-                        .selected_text(rotate_axis_name(self.manipulation.rotate_axis))
+                        .selected_text(rotate_axis_name(self.manipulation.rotate_axis()))
                         .show_ui(ui, |ui| {
                             for axis in [RotateAxis::X, RotateAxis::Y, RotateAxis::Z] {
-                                ui.selectable_value(
-                                    &mut self.manipulation.rotate_axis,
-                                    axis,
-                                    rotate_axis_name(axis),
-                                );
+                                if ui
+                                    .selectable_label(
+                                        self.manipulation.rotate_axis() == axis,
+                                        rotate_axis_name(axis),
+                                    )
+                                    .clicked()
+                                {
+                                    chosen_handle = Some(ToolHandle::RotateAxis(axis));
+                                }
                             }
                         });
                 } else {
                     egui::ComboBox::from_id_salt("manipulation_axis")
-                        .selected_text(scale_handle_name(self.manipulation.scale_handle))
+                        .selected_text(scale_handle_name(self.manipulation.scale_handle()))
                         .show_ui(ui, |ui| {
                             for handle in [
                                 ScaleHandle::X,
@@ -748,11 +796,15 @@ impl Editor {
                                 ScaleHandle::Z,
                                 ScaleHandle::Uniform,
                             ] {
-                                ui.selectable_value(
-                                    &mut self.manipulation.scale_handle,
-                                    handle,
-                                    scale_handle_name(handle),
-                                );
+                                if ui
+                                    .selectable_label(
+                                        self.manipulation.scale_handle() == handle,
+                                        scale_handle_name(handle),
+                                    )
+                                    .clicked()
+                                {
+                                    chosen_handle = Some(ToolHandle::ScaleHandle(handle));
+                                }
                             }
                         });
                 }
@@ -775,6 +827,9 @@ impl Editor {
         });
         if let Some(space) = chosen {
             self.native_operation(Operation::SetToolSpace { tool, space });
+        }
+        if let Some(handle) = chosen_handle {
+            self.native_operation(Operation::SetToolHandle(handle));
         }
         if apply {
             self.apply_numeric_manipulation();
@@ -813,7 +868,7 @@ impl Editor {
             ActiveTool::Rotate => (
                 Operation::BeginRotate {
                     target,
-                    axis: self.manipulation.rotate_axis,
+                    axis: self.manipulation.rotate_axis(),
                     space,
                 },
                 ManipulationValue::Angle(number),
@@ -821,7 +876,7 @@ impl Editor {
             ActiveTool::Scale => (
                 Operation::BeginScale {
                     target,
-                    handle: self.manipulation.scale_handle,
+                    handle: self.manipulation.scale_handle(),
                     space,
                 },
                 ManipulationValue::Factor(number),

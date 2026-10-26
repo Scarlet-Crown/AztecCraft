@@ -98,7 +98,7 @@ pub(in crate::mcp) const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "save_scene",
-        description: "Save the active supported Maya binary document, an authored untitled scene to a fresh .ma path, or reconcile an earlier uncertain installation without another write",
+        description: "Save the active supported Maya binary document, or reconcile an earlier uncertain installation without another write",
         schema: schema::<MutationArgs>,
         parse: parse_save_scene,
         idempotent: false,

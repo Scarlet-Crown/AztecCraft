@@ -539,3 +539,282 @@ fn an_end_on_axis_picks_only_where_it_is_drawn_and_never_steals_other_axes() {
         assert!((segment.end - handles.origin).length() < 4.0);
     }
 }
+
+const SIZES: [f64; 3] = [0.1, 1.0, 10.0];
+
+fn sized(camera: &Camera, size: f64) -> ViewportCapture {
+    capture(camera, 1.0).with_manipulator_size(ManipulatorSize::new(size).unwrap())
+}
+
+fn oblique_camera() -> Camera {
+    Camera::new(Vec3::ZERO, 0.6, 0.4, 10.0, 90_f32.to_radians(), 0.1, 100.0).unwrap()
+}
+
+fn shaft_of(handles: &WorldHandles, index: usize) -> ScreenSegment {
+    *handles.axes()[index]
+        .arrow()
+        .unwrap()
+        .segments()
+        .next()
+        .unwrap()
+}
+
+#[test]
+fn manipulator_size_accepts_only_finite_values_in_range_and_rounds_to_milli() {
+    for value in [0.1, 10.0, 1.0] {
+        assert_eq!(ManipulatorSize::new(value).unwrap().get(), value);
+    }
+    for value in [0.0999, 10.0001, 0.0, -0.0, -1.0] {
+        assert_eq!(
+            ManipulatorSize::new(value),
+            Err(ManipulatorSizeError::OutOfRange),
+            "{value}"
+        );
+    }
+    for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert_eq!(
+            ManipulatorSize::new(value),
+            Err(ManipulatorSizeError::NotFinite)
+        );
+    }
+    assert_eq!(ManipulatorSize::new(2.123_49).unwrap().get(), 2.123);
+    assert_eq!(ManipulatorSize::default().get(), 1.0);
+}
+
+#[test]
+fn manipulator_size_steps_on_the_exponent_grid_and_saturate_at_its_ends() {
+    let one = ManipulatorSize::default();
+    assert_eq!(one.grown().unwrap().get(), 1.25);
+    assert_eq!(one.shrunk().unwrap().get(), 0.8);
+    let top = ManipulatorSize::new(10.0).unwrap();
+    assert_eq!(top.grown(), None);
+    assert_eq!(top.shrunk().unwrap().get(), 1.25_f64.powi(10));
+    assert_eq!(ManipulatorSize::new(0.1).unwrap().shrunk(), None);
+    assert_eq!(
+        ManipulatorSize::new(9.0).unwrap().grown().unwrap().get(),
+        1.25_f64.powi(10)
+    );
+    assert_eq!(ManipulatorSize(1.25_f64.powi(10)).grown(), None);
+    assert_eq!(ManipulatorSize(1.25_f64.powi(-10)).shrunk(), None);
+    let mut size = one;
+    for _ in 0..50 {
+        size = size.grown().unwrap_or(size);
+        assert!((0.1..=10.0).contains(&size.get()));
+    }
+    assert_eq!(size.get(), 1.25_f64.powi(10));
+    for _ in 0..50 {
+        size = size.shrunk().unwrap_or(size);
+        assert!((0.1..=10.0).contains(&size.get()));
+    }
+    assert_eq!(size.get(), 1.25_f64.powi(-10));
+}
+
+#[test]
+fn key_steps_from_any_grid_value_return_to_it_bit_exactly() {
+    for k in -GRID_LIMIT..=GRID_LIMIT {
+        let start = ManipulatorSize(1.25_f64.powi(k));
+        for n in 1..=20 {
+            let mut size = start;
+            let mut reachable = true;
+            for _ in 0..n {
+                match size.shrunk() {
+                    Some(next) => size = next,
+                    None => reachable = false,
+                }
+            }
+            if !reachable {
+                continue;
+            }
+            for _ in 0..n {
+                size = size.grown().unwrap();
+            }
+            assert_eq!(size.get().to_bits(), start.get().to_bits(), "k={k} n={n}");
+        }
+        for n in 1..=20 {
+            let mut size = start;
+            let mut reachable = true;
+            for _ in 0..n {
+                match size.grown() {
+                    Some(next) => size = next,
+                    None => reachable = false,
+                }
+            }
+            if !reachable {
+                continue;
+            }
+            for _ in 0..n {
+                size = size.shrunk().unwrap();
+            }
+            assert_eq!(size.get().to_bits(), start.get().to_bits(), "k={k} n={n}");
+        }
+    }
+}
+
+#[test]
+fn a_key_step_from_an_off_grid_value_moves_to_the_adjacent_grid_value() {
+    let off = ManipulatorSize::new(2.5).unwrap();
+    assert_eq!(off.grown().unwrap().get(), 1.25_f64.powi(5));
+    assert_eq!(off.shrunk().unwrap().get(), 1.25_f64.powi(4));
+    let low = ManipulatorSize::new(1.2).unwrap();
+    assert_eq!(low.grown().unwrap().get(), 1.25);
+}
+
+#[test]
+fn every_milli_size_steps_to_the_adjacent_visibly_different_grid_value() {
+    let grid: Vec<f64> = (-GRID_LIMIT..=GRID_LIMIT)
+        .map(|k| 1.25_f64.powi(k))
+        .collect();
+    let (mut skips, mut wrong_way, mut stuck, mut false_refusals) = (0, 0, 0, 0);
+    for milli in 100..=10_000 {
+        let size = ManipulatorSize::new(f64::from(milli) / 1000.0).unwrap();
+        let shown = round_milli(size.get());
+        let up = grid.iter().copied().find(|g| round_milli(*g) > shown);
+        let down = grid.iter().copied().rev().find(|g| round_milli(*g) < shown);
+        for (step, expected, upward) in [(size.grown(), up, true), (size.shrunk(), down, false)] {
+            match (step.map(ManipulatorSize::get), expected) {
+                (Some(next), _) if round_milli(next) == shown => stuck += 1,
+                (Some(next), _) if (round_milli(next) > shown) != upward => wrong_way += 1,
+                (Some(next), Some(want)) if next == want => {}
+                (Some(_), Some(_)) => skips += 1,
+                (Some(_), None) => wrong_way += 1,
+                (None, Some(_)) => false_refusals += 1,
+                (None, None) => {}
+            }
+        }
+    }
+    assert_eq!((skips, wrong_way, stuck, false_refusals), (0, 0, 0, 0));
+}
+
+#[test]
+fn an_exact_tie_steps_by_its_shown_value_and_keeps_the_raw_grid_value() {
+    let bits = |size: Option<ManipulatorSize>| size.unwrap().get().to_bits();
+    let tie = 1.25_f64.powi(2);
+    assert_eq!(tie, 1.5625);
+    assert_eq!(
+        bits(ManipulatorSize::new(1.562).unwrap().grown()),
+        tie.to_bits()
+    );
+    assert_eq!(bits(ManipulatorSize(tie).shrunk()), 1.25_f64.to_bits());
+    assert_eq!(
+        bits(ManipulatorSize::new(1.563).unwrap().shrunk()),
+        1.25_f64.to_bits()
+    );
+    assert_eq!(
+        bits(ManipulatorSize::new(1.563).unwrap().grown()),
+        1.25_f64.powi(3).to_bits()
+    );
+    assert_eq!(ManipulatorSize::new(tie).unwrap().get(), 1.563);
+}
+
+#[test]
+fn key_limits_are_the_ends_of_the_grid() {
+    assert_eq!(
+        ManipulatorSize::key_limits(),
+        (1.25_f64.powi(-10), 1.25_f64.powi(10))
+    );
+}
+
+#[test]
+fn a_size_just_below_a_grid_point_steps_past_it_and_the_top_refuses() {
+    let near = ManipulatorSize::new(1.953).unwrap();
+    assert_eq!(near.grown().unwrap().get(), 1.25_f64.powi(4));
+    assert_eq!(ManipulatorSize::new(9.313).unwrap().grown(), None);
+    assert_eq!(ManipulatorSize::new(0.107).unwrap().shrunk(), None);
+}
+
+#[test]
+fn move_axes_are_pickable_outside_the_centre_at_every_size() {
+    let camera = oblique_camera();
+    for size in SIZES {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        for (index, axis) in [WorldAxis::X, WorldAxis::Y, WorldAxis::Z]
+            .into_iter()
+            .enumerate()
+        {
+            let shaft = shaft_of(&handles, index);
+            let point = shaft.start + (shaft.end - shaft.start) * 0.75;
+            assert!(point.distance(handles.origin) > CENTER_EXCLUSION);
+            assert_eq!(handles.hit_test(point), Some(axis), "{axis:?} at {size}");
+        }
+    }
+}
+
+#[test]
+fn the_move_pick_radius_stays_six_pixels_at_every_size() {
+    let camera = front_camera();
+    for size in [0.1, 10.0] {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        let shaft = shaft_of(&handles, 0);
+        let along = (shaft.end - shaft.start).normalize();
+        let normal = DVec2::new(-along.y, along.x);
+        let on_shaft = shaft.start + (shaft.end - shaft.start) * 0.35;
+        assert_eq!(
+            handles.hit_test(on_shaft + normal * (HIT_RADIUS - 0.1)),
+            Some(WorldAxis::X),
+            "inside at {size}"
+        );
+        assert_eq!(
+            handles.hit_test(on_shaft + normal * (HIT_RADIUS + 0.1)),
+            None,
+            "outside at {size}"
+        );
+    }
+}
+
+#[test]
+fn move_length_scales_with_size_above_the_floor_and_sizes_below_it_draw_alike() {
+    let camera = front_camera();
+    let length = |size: f64| {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        let shaft = shaft_of(&handles, 0);
+        (shaft.end - shaft.start).length()
+    };
+    near(length(1.0), 72.0, 1e-5);
+    near(length(0.5), 36.0, 1e-5);
+    near(length(0.1), 36.0, 1e-5);
+    let segments = |size: f64| {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        handles.axes()[0]
+            .arrow()
+            .unwrap()
+            .segments()
+            .map(|segment| (segment.start, segment.end))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(segments(0.1), segments(0.5));
+    assert_ne!(segments(0.5), segments(1.0));
+}
+
+#[test]
+fn the_floor_applies_before_the_foreshortening() {
+    let camera = Camera::new(Vec3::ZERO, 1.2, 0.0, 10.0, 90_f32.to_radians(), 0.1, 100.0).unwrap();
+    let capture = sized(&camera, 0.1);
+    let fraction = capture.projected_fraction(DVec3::ZERO, DVec3::X).unwrap();
+    assert!((0.1..0.9).contains(&fraction), "{fraction}");
+    let handles = WorldHandles::new(&capture, DVec3::ZERO).unwrap();
+    let shaft = shaft_of(&handles, 0);
+    let drawn = (shaft.end - shaft.start).length();
+    assert!(drawn < 36.0, "{drawn}");
+    near(drawn, 36.0 * fraction, 1e-6);
+}
+
+#[test]
+fn the_move_centre_exclusion_stays_fixed_at_every_size() {
+    let camera = oblique_camera();
+    for (size, distance, picked) in [(0.1, 8.0, false), (10.0, 12.0, true), (0.1, 12.0, true)] {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        for (index, axis) in [WorldAxis::X, WorldAxis::Y, WorldAxis::Z]
+            .into_iter()
+            .enumerate()
+        {
+            let shaft = shaft_of(&handles, index);
+            let direction = (shaft.end - shaft.start).normalize();
+            let hit = handles.hit_test(shaft.start + direction * distance);
+            assert_eq!(
+                hit,
+                picked.then_some(axis),
+                "{axis:?} at {size}, {distance}"
+            );
+        }
+    }
+}

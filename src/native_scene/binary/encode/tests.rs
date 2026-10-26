@@ -1181,6 +1181,74 @@ mod enabled {
     }
 
     #[test]
+    fn has_field_distinguishes_fields_of_one_owner() {
+        use super::super::has_field;
+        use crate::native_scene::source::TransformField::{Rotation, Scale, Translation};
+        let edited = decode(scene(&pair(&[], &[]))).unwrap();
+        let (a, d) = (edited.nodes[0].transform_id, edited.nodes[1].transform_id);
+        assert!(a < d);
+        let fields = [
+            (a, Translation),
+            (a, Scale),
+            (d, Rotation),
+            (d, Translation),
+        ];
+        // Several fields per owner, so a `take(1)` lookup would miss the second one.
+        assert!(fields.windows(2).any(|w| w[0].0 == w[1].0));
+        for (owner, field) in fields {
+            assert!(has_field(&fields, owner, field));
+        }
+        assert!(!has_field(&fields, a, Rotation));
+        assert!(!has_field(&fields, d, Scale));
+        assert!(!has_field(&fields[1..], a, Translation));
+        assert!(!has_field(&[], a, Translation));
+    }
+
+    #[test]
+    fn has_field_with_one_field_per_owner_matches_only_that_field() {
+        use super::super::has_field;
+        use crate::native_scene::source::TransformField::{Rotation, Scale, Translation};
+        let edited = decode(scene(&pair(&[], &[]))).unwrap();
+        let (a, d) = (edited.nodes[0].transform_id, edited.nodes[1].transform_id);
+        let fields = [(a, Translation), (d, Rotation)];
+        assert!(has_field(&fields, a, Translation));
+        assert!(has_field(&fields, d, Rotation));
+        for (owner, field) in [(a, Rotation), (a, Scale), (d, Translation), (d, Scale)] {
+            assert!(!has_field(&fields, owner, field));
+        }
+        assert!(!has_field(&fields[..1], d, Rotation));
+        assert!(!has_field(&fields[1..], a, Translation));
+    }
+
+    #[test]
+    fn an_unsorted_elided_list_keeps_the_lookups_exact() {
+        use super::super::{encode_with, plan::plan};
+        use crate::native_scene::source::{INSERTABLE, SourceFormat};
+        let bytes = scene(&pair(&[], &[]));
+        let mut edited = decode(bytes.clone()).unwrap();
+        for index in 0..2 {
+            let id = edited.nodes()[index].id();
+            edited.set_channel(id, Channel::TranslateX, 5.0).unwrap();
+            edited.set_channel(id, Channel::TranslateX, 0.0).unwrap();
+        }
+        let source = edited
+            .source
+            .as_ref()
+            .filter(|source| source.format == SourceFormat::Binary)
+            .unwrap();
+        let planned = plan(&edited, source, INSERTABLE).unwrap();
+        assert!(planned.insertions.is_empty());
+        assert_eq!(planned.elided.len(), 2);
+        let mut reversed = planned.elided.clone();
+        reversed.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
+        assert_ne!(planned.elided, reversed);
+        assert_eq!(
+            encode_with(&edited, &planned.insertions, &reversed).unwrap(),
+            bytes.as_ref()
+        );
+    }
+
+    #[test]
     fn a_value_that_underflows_to_zero_centimetres_is_elided() {
         let bytes = scene_with_units(&children(&[]), b"mm", b"deg");
         let mut edited = decode(bytes.clone()).unwrap();

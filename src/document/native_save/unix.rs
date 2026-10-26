@@ -547,18 +547,18 @@ pub(super) fn save_authored(
     // Opening a saved `.ma` mesh scene back into AztecCraft is not yet supported;
     // it is tracked separately. The file is valid Maya ASCII and opens in Maya.
 
-    // Resolve the destination path
-    let path = match destination {
-        SaveDestination::As(path) => path.to_path_buf(),
+    // Resolve the destination path and determine if it is Save As or Active
+    let (path, is_save_as) = match destination {
+        SaveDestination::As(path) => (path.to_path_buf(), true),
         SaveDestination::Active => match origin {
             NativeOrigin::AuthoredAscii(source) => {
-                source.destination_path().ok_or(Error::Unsupported)?
+                (source.destination_path().ok_or(Error::Unsupported)?, false)
             }
             _ => return Err(Error::Unsupported),
         },
     };
 
-    // Validate that the destination is a .ma file
+    // Validate that the destination has a .ma extension (case-insensitive)
     if !path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("ma"))
@@ -566,7 +566,7 @@ pub(super) fn save_authored(
         return Err(Error::InvalidDestination);
     }
 
-    // Generate the bytes
+    // Generate the bytes for the Maya ASCII scene. This uses the `emit_geometry_prefix` function
     let bytes: Arc<[u8]> = emit_geometry_prefix(scene)
         .map_err(Error::AsciiWrite)?
         .into();
@@ -574,21 +574,26 @@ pub(super) fn save_authored(
     // Capture the destination
     let destination = Arc::new(Destination::capture(&path).map_err(io_error)?);
 
-    // Determinate if this is a Save As (destination does not exist) or Active (destination exists)
-    let baseline = match origin {
-        NativeOrigin::AuthoredAscii(source) => {
-            if destination.verify(&source.file, &source.bytes).is_ok() {
-                Some(source)
-            } else {
-                return Err(Error::SourceChanged);
+    // Determinate the baseline (using the boolean is_save_as)
+    let baseline = if is_save_as {
+        // Save As: the new destination MUST be absent.
+        destination.absent()?;
+        None
+    } else {
+        // Active: verify that it matches the origin.
+        match origin {
+            NativeOrigin::AuthoredAscii(source) => {
+                if destination.verify(&source.file, &source.bytes).is_ok() {
+                    Some(source)
+                } else {
+                    return Err(Error::SourceChanged);
+                }
             }
-        }
-        _ => {
-            destination.absent()?;
-            None
+            _ => return Err(Error::Unsupported),
         }
     };
 
+    // Create the transaction
     let transaction = Transaction {
         destination,
         baseline,
@@ -598,6 +603,7 @@ pub(super) fn save_authored(
         state: RefCell::new(State::default()),
     };
 
+    // Execute
     transaction.run(&transaction, RenameRetry::platform())
 }
 

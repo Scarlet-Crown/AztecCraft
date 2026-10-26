@@ -31,6 +31,8 @@ pub(super) struct FileState {
     pending: Option<PendingAction>,
     close_approved: bool,
     close_sent: bool,
+    /// `finish(true)` went out: AppKit's deferred reply now owns the exit.
+    terminate_approved: bool,
     uncertain: Option<UncertainSave>,
 }
 struct UncertainSave {
@@ -238,7 +240,19 @@ impl Editor {
     pub(super) fn close_document(&mut self) -> Result<OperationReply, OperationError> {
         self.request_file_action(FileAction::Close)
     }
+    /// Native dialogs bypass the disabled menu rows, so they refuse here like `native_operation` does.
+    fn refuse_while_closing(&mut self) -> bool {
+        let closing = self.files.is_closing();
+        if closing {
+            self.set_error_status(&OperationError::BusyEditing);
+            self.error = true;
+        }
+        closing
+    }
     pub(super) fn open_dialog(&mut self) {
+        if self.refuse_while_closing() {
+            return;
+        }
         if let Err(error) = self.cancel_move() {
             self.set_error_status(&error);
             self.error = true;
@@ -258,6 +272,11 @@ impl Editor {
         }
     }
     pub(super) fn save_as_dialog(&mut self) {
+        if self.files.is_closing() {
+            self.status = OperationError::BusyEditing.to_string();
+            self.error = true;
+            return;
+        }
         if self.history.active_manipulation().is_some() {
             self.status = OperationError::BusyManipulation.to_string();
             self.error = true;
@@ -266,12 +285,12 @@ impl Editor {
         if self.files.is_modal() || !self.files.save_as_available() {
             return;
         }
-        // Chosen filter is based on the scene origin.
+        // Select the filter based on the scene origin.
         let dialog = match &self.files.origin {
             NativeOrigin::Binary(_) => rfd::FileDialog::new()
                 .set_title("Save Maya binary scene to a new file")
                 .add_filter("Maya binary scene", &["mb"]),
-            NativeOrigin::Untitled => rfd::FileDialog::new()
+            NativeOrigin::Untitled | NativeOrigin::AuthoredAscii(_) => rfd::FileDialog::new()
                 .set_title("Save Maya ASCII scene to a new file")
                 .add_filter("Maya ASCII scene", &["ma"])
                 .set_file_name("untitled.ma"),
@@ -396,8 +415,26 @@ impl Editor {
             return Err(OperationError::NativeSave(NativeSaveError::SourceChanged));
         }
         if matches!(decision, FileDecision::Save) {
-            let mut reply = self.save_document(SaveDestination::Active, may_install)?;
+            let closing = matches!(
+                self.files.pending,
+                Some(PendingAction {
+                    action: FileAction::Close,
+                    ..
+                })
+            );
+            let mut reply = match self.save_document(SaveDestination::Active, may_install) {
+                Ok(reply) => reply,
+                Err(error) => {
+                    if closing {
+                        self.decline_terminate();
+                    }
+                    return Err(error);
+                }
+            };
             if matches!(reply, OperationReply::SaveUncertain { .. }) {
+                if closing {
+                    self.decline_terminate();
+                }
                 return Ok(reply);
             }
             if let Some(PendingAction {
@@ -459,9 +496,14 @@ impl Editor {
             .take()
             .ok_or(OperationError::StalePendingAction)?;
         match decision {
-            FileDecision::Cancel => Ok(OperationReply::Cancelled {
-                scene_token: self.scene_token.to_string(),
-            }),
+            FileDecision::Cancel => {
+                if matches!(pending.action, FileAction::Close) {
+                    self.decline_terminate();
+                }
+                Ok(OperationReply::Cancelled {
+                    scene_token: self.scene_token.to_string(),
+                })
+            }
             FileDecision::Discard | FileDecision::Save => self.apply_file_action(pending.action),
         }
     }
@@ -477,8 +519,7 @@ impl Editor {
             match bridge.poll_close_delivery() {
                 Some(crate::mcp::CloseDelivery::Waiting) => return false,
                 Some(crate::mcp::CloseDelivery::Failed) => {
-                    self.files.close_approved = false;
-                    self.files.close_sent = false;
+                    self.decline_terminate();
                     self.status = "Close response was not delivered; the scene remains open. Inspect before retrying.".into();
                     self.error = true;
                     return false;
@@ -488,7 +529,69 @@ impl Editor {
         }
         self.files.close_approved
     }
+    /// Answers an owed OS termination with "keep running" and drops any approval, in the same
+    /// frame, so the per-frame owed branch cannot re-request a close that was already refused.
+    fn decline_terminate(&mut self) {
+        if self.terminate.owed() {
+            self.terminate.finish(false);
+        }
+        self.files.close_approved = false;
+        self.files.close_sent = false;
+        self.files.terminate_approved = false;
+        self.shutdown.reset();
+    }
+    /// Per-frame driver for a SIGTERM (#261, PROVISIONAL): starts the same close guard as the
+    /// window's close button once nothing else is waiting on the user.
+    fn drive_shutdown_signal(&mut self, ctx: &egui::Context) {
+        if !self.shutdown.requested() {
+            return;
+        }
+        ctx.request_repaint();
+        if self.files.is_modal() || self.files.close_approved || self.native_input_pending {
+            return;
+        }
+        self.shutdown.consume();
+        self.request_close();
+        if !self.files.is_modal() && !self.files.close_approved {
+            // Refused (invalid draft, active manipulation): not pending, so the next SIGTERM
+            // must prompt again instead of forcing the exit.
+            self.decline_terminate();
+        }
+    }
+    /// Per-frame driver for an owed OS termination. It does not wait for a `close_requested`
+    /// event, which AppKit's `performClose:` can lose or delay, and it keeps the loop ticking.
+    fn drive_owed_terminate(&mut self, ctx: &egui::Context, ready: bool) {
+        if !self.terminate.owed() {
+            return;
+        }
+        ctx.request_repaint();
+        if ready {
+            if self.files.close_sent {
+                // A viewport Close already went out and exits the app. Approving as well would
+                // run a second exit through `applicationWillTerminate:`, so refuse instead.
+                self.terminate.finish(false);
+            } else {
+                // The reply drives the exit through `applicationWillTerminate:`; `close_sent`
+                // keeps `send_close_when_ready` from also closing the viewport once the reply
+                // clears `owed`.
+                self.terminate.finish(true);
+                self.files.close_sent = true;
+                self.files.terminate_approved = true;
+            }
+        } else if !self.files.is_modal() && !self.files.close_approved && !self.native_input_pending
+        {
+            self.request_close();
+            if !self.files.is_modal() && !self.files.close_approved {
+                // The request was refused (invalid draft, active manipulation) and would be
+                // refused every frame: cancel the termination instead of hanging a logout.
+                self.decline_terminate();
+            }
+        }
+    }
     fn send_close_when_ready(&mut self, ctx: &egui::Context) {
+        if self.terminate.owed() {
+            return;
+        }
         if !self.files.close_sent && self.close_ready() {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             self.files.close_sent = true;
@@ -496,12 +599,17 @@ impl Editor {
     }
     pub(super) fn handle_close(&mut self, ctx: &egui::Context) {
         let ready = self.close_ready();
-        if ctx.input(|i| i.viewport().close_requested()) && !ready {
+        // A late `performClose:` event must never let eframe close the viewport itself while the
+        // deferred AppKit reply owns the exit.
+        let guarded = self.terminate.owed() || self.files.terminate_approved;
+        if ctx.input(|i| i.viewport().close_requested()) && (!ready || guarded) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             if !self.files.close_approved && !self.native_input_pending {
                 self.request_close();
             }
         }
+        self.drive_owed_terminate(ctx, ready);
+        self.drive_shutdown_signal(ctx);
         self.send_close_when_ready(ctx);
     }
     pub(super) fn file_modal(&mut self, ctx: &egui::Context) {
@@ -594,7 +702,7 @@ mod tests {
     use azteccraft::scene::Primitive;
 
     #[cfg(unix)]
-    fn relocate_completed_stage_once(
+    pub(super) fn relocate_completed_stage_once(
         parent: &Path,
         moved: &Path,
         expected: &[u8],
@@ -2069,3 +2177,11 @@ mod tests {
         assert!(editor.is_dirty());
     }
 }
+
+#[cfg(test)]
+#[path = "app/terminate_tests.rs"]
+mod terminate_tests;
+
+#[cfg(test)]
+#[path = "app/shutdown_tests.rs"]
+mod shutdown_tests;

@@ -11,10 +11,12 @@
 
 use super::*;
 use crate::editor_operations::{
-    FileDecision, ManipulationSpace, ManipulationValue, MoveDistance, RemoteRequest, TransformInput,
+    FileDecision, ManipulationSpace, ManipulationValue, MoveDistance, RemoteRequest, ToolHandle,
+    TransformInput,
 };
 use azteccraft::history::Command;
 use azteccraft::history::{ManipulationFinish, ManipulationId};
+use azteccraft::move_handles::ManipulatorSize;
 use azteccraft::native_scene::{
     MaterialChoice, NativeScene, RotateAxis, ScaleHandle, SessionMaterialId, TransformTarget,
     WorldAxis,
@@ -519,6 +521,8 @@ fn seeds(t: &Targets) -> Vec<Operation> {
             tool: ActiveTool::Scale,
             space: ManipulationSpace::Object,
         },
+        Operation::SetToolHandle(ToolHandle::RotateAxis(RotateAxis::Y)),
+        Operation::SetManipulatorSize(ManipulatorSize::new(2.0).unwrap()),
         Operation::BeginMove {
             target: t.transform_target(),
             axis: WorldAxis::X,
@@ -639,6 +643,13 @@ fn seeds(t: &Targets) -> Vec<Operation> {
             world_units: [1.0, 0.0],
         },
         Operation::Dolly { factor: 1.1 },
+        // Differs from the rig's default camera so a Changed outcome is observable.
+        Operation::SetCameraPose {
+            target: [1.0, 0.5, -2.0],
+            distance: 5.0,
+            yaw: 0.3,
+            pitch: 0.2,
+        },
     ]
 }
 
@@ -684,6 +695,30 @@ fn expand(seed: Operation, t: &Targets) -> Vec<Sample> {
                     tool: ActiveTool::Move,
                     space: ManipulationSpace::World,
                 },
+            ),
+        ],
+        Operation::SetToolHandle(_) => vec![
+            sample(
+                "set_tool_handle(rotate,y)",
+                Operation::SetToolHandle(ToolHandle::RotateAxis(RotateAxis::Y)),
+            ),
+            sample(
+                "set_tool_handle(scale,uniform)",
+                Operation::SetToolHandle(ToolHandle::ScaleHandle(ScaleHandle::Uniform)),
+            ),
+            sample(
+                "set_tool_handle(scale,x)",
+                Operation::SetToolHandle(ToolHandle::ScaleHandle(ScaleHandle::X)),
+            ),
+        ],
+        Operation::SetManipulatorSize(_) => vec![
+            sample(
+                "set_manipulator_size(2)",
+                Operation::SetManipulatorSize(ManipulatorSize::new(2.0).unwrap()),
+            ),
+            sample(
+                "set_manipulator_size(1)",
+                Operation::SetManipulatorSize(ManipulatorSize::default()),
             ),
         ],
         Operation::BeginMove { .. } => vec![
@@ -1220,6 +1255,15 @@ fn expand(seed: Operation, t: &Targets) -> Vec<Sample> {
             },
         )],
         Operation::Dolly { .. } => vec![sample("dolly", Operation::Dolly { factor: 1.1 })],
+        Operation::SetCameraPose { .. } => vec![sample(
+            "set_camera_pose",
+            Operation::SetCameraPose {
+                target: [1.0, 0.5, -2.0],
+                distance: 5.0,
+                yaw: 0.3,
+                pitch: 0.2,
+            },
+        )],
     }
 }
 
@@ -1342,6 +1386,20 @@ fn observe(editor: &Editor, roots: &[&std::path::Path]) -> Observed {
         ("dirty", editor.is_dirty().to_string()),
         ("can_undo", editor.history.can_undo().to_string()),
         ("can_redo", editor.history.can_redo().to_string()),
+        (
+            "tool_settings",
+            format!(
+                "rotate_space={:?} scale_space={:?} rotate_axis={:?} scale_handle={:?}",
+                editor.manipulation.space(ActiveTool::Rotate),
+                editor.manipulation.space(ActiveTool::Scale),
+                editor.manipulation.rotate_axis(),
+                editor.manipulation.scale_handle()
+            ),
+        ),
+        (
+            "manipulator_size",
+            editor.manipulation.manipulator_size().get().to_string(),
+        ),
     ];
     Observed {
         scene: scene.clone(),

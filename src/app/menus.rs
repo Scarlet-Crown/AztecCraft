@@ -4,6 +4,13 @@ use azteccraft::ui_icons::UiIcon;
 /// One File menu entry that the Status Line also draws, so the two cannot diverge.
 pub(super) struct FileAction {
     pub(super) label: &'static str,
+    /// Hotkey text shown after the label in the menu row, only for keys that are bound.
+    pub(super) hint: Option<&'static str>,
+    /// The key and whether Shift is held, with Command (Ctrl off macOS); `shortcuts()` dispatches
+    /// the row this names, so the key, the hint and the click share one `enabled` and `run`.
+    pub(super) chord: (Key, bool),
+    /// False for entries the Status Line does not draw (Save Scene As has no button).
+    pub(super) strip: bool,
     pub(super) icon: UiIcon,
     /// Strip hover text when there is no disabled reason.
     pub(super) tooltip: &'static str,
@@ -37,12 +44,45 @@ pub(super) const MODELING_SET_MENUS: [&str; 9] = [
 pub(super) const HELP_MENU: &str = "Help";
 
 /// Maya's Edit > Delete by Type and Delete All by Type rows; the type list is not implemented.
-const DELETE_BY_TYPE_REASON: &str =
+pub(super) const DELETE_BY_TYPE_REASON: &str =
     "Deleting by node type is not supported yet; select the object and use Delete";
+
+pub(super) const POLYGON_PRIMITIVES_MENU: &str = "Polygon Primitives";
+
+pub(super) const INTERACTIVE_CREATION_REASON: &str =
+    "Interactive creation is not implemented; primitives are created at the origin";
+pub(super) const EXIT_ON_COMPLETION_REASON: &str =
+    "Only applies to interactive creation, which is not implemented";
+
+/// Maya 2027's Create > Polygon Primitives list (docs GUID-45D2EAD4-5BCF-42DA-A1AB-EC6EE09FE705);
+/// the order within the submenu is PROVISIONAL. `None` marks an entry not built yet.
+pub(super) const POLYGON_PRIMITIVES: [(&str, Option<Primitive>); 15] = [
+    ("Sphere", Some(Primitive::Sphere)),
+    ("Cube", Some(Primitive::Cube)),
+    ("Cylinder", Some(Primitive::Cylinder)),
+    ("Cone", Some(Primitive::Cone)),
+    ("Torus", None),
+    ("Plane", Some(Primitive::Plane)),
+    ("Disc", None),
+    ("Platonic Solid", None),
+    ("Pyramid", None),
+    ("Prism", None),
+    ("Pipe", None),
+    ("Helix", None),
+    ("Gear", None),
+    ("Soccer Ball", None),
+    ("Super Shapes", None),
+];
+
+fn unbuilt_primitive_reason(label: &str) -> String {
+    format!(
+        "{label} is not implemented yet; the supported primitives are Sphere, Cube, Cylinder, Cone and Plane"
+    )
+}
 
 fn placeholder_menu(ui: &mut egui::Ui, label: &str) {
     ui.menu_button(label, |ui| {
-        unsupported(ui, "Not implemented yet");
+        unsupported(ui, NOT_IMPLEMENTED_YET);
         if label == "Display" {
             // Maya's Display > Grid option box: size, spacing, divisions and colours (#160).
             ui.add_enabled(false, egui::Button::new("Grid Options"))
@@ -61,7 +101,52 @@ fn history_hover(verb: &str, label: Option<&str>) -> String {
     }
 }
 
+pub(super) const NEW_LABEL: &str = "New Scene";
+pub(super) const OPEN_LABEL: &str = "Open Scene";
+pub(super) const SAVE_LABEL: &str = "Save Scene";
+pub(super) const SAVE_AS_LABEL: &str = "Save Scene As";
+/// Why every File action is unavailable once the window is closing.
+pub(super) const CLOSING_REASON: &str = "the window is closing";
+
+/// The disabled hover for a File action while closing.
+pub(super) fn unavailable_while_closing(label: &str) -> String {
+    format!("{label}: unavailable while {CLOSING_REASON}")
+}
+
+const NEW_HINT: &str = "Ctrl/Cmd N";
+const OPEN_HINT: &str = "Ctrl/Cmd O";
+const SAVE_HINT: &str = "Ctrl/Cmd S";
+const SAVE_AS_HINT: &str = "Ctrl/Cmd Shift S";
+
+/// The first File chord pressed this frame: N, O or S with Command, and whether Shift is held.
+/// Key repeat is ignored so a held key cannot start a second New or dialog.
+pub(super) fn file_chord(events: &[egui::Event]) -> Option<(Key, bool)> {
+    events.iter().find_map(|event| match event {
+        egui::Event::Key {
+            key: key @ (Key::N | Key::O | Key::S),
+            pressed: true,
+            repeat: false,
+            modifiers,
+            ..
+        } if modifiers.command && !modifiers.alt => Some((*key, modifiers.shift)),
+        _ => None,
+    })
+}
+
+/// The table row a chord belongs to.
+pub(super) fn chord_entry(actions: &[FileAction], chord: (Key, bool)) -> Option<usize> {
+    actions.iter().position(|action| action.chord == chord)
+}
+
 impl FileAction {
+    /// The menu row text: the label, then the hotkey after three spaces like Undo and Redo.
+    pub(super) fn menu_text(&self) -> String {
+        match self.hint {
+            Some(hint) => format!("{}   {hint}", self.label),
+            None => self.label.to_owned(),
+        }
+    }
+
     pub(super) fn hover(&self) -> &str {
         match (self.enabled, self.reason.as_deref()) {
             (false, Some(reason)) => reason,
@@ -71,37 +156,66 @@ impl FileAction {
 }
 
 impl Editor {
-    /// New, Open and Save in menu order: enable state, disabled reason and dispatch.
-    pub(super) fn file_actions(&self) -> [FileAction; 3] {
+    /// New, Open, Save and Save As in menu order: label, hint, enable state, disabled reason and
+    /// dispatch. The File menu and the Status Line both read this table.
+    pub(super) fn file_actions(&self) -> [FileAction; 4] {
         let read_only_reason = self
             .history
             .scene()
             .authoring_read_only_reason()
             .map(|reason| reason.to_string());
+        let closing = self.files.is_closing();
+        // Closing is the stronger state, so it names the reason ahead of a read-only scene.
+        let reason_for = |label: &str| {
+            closing
+                .then(|| unavailable_while_closing(label))
+                .or_else(|| read_only_reason.clone())
+        };
+        let closing_only = |label: &str| closing.then(|| unavailable_while_closing(label));
         [
             FileAction {
-                label: "New scene",
+                label: NEW_LABEL,
+                hint: Some(NEW_HINT),
+                chord: (Key::N, false),
+                strip: true,
                 icon: UiIcon::FileNew,
-                tooltip: "New scene",
-                enabled: true,
-                reason: None,
+                tooltip: NEW_LABEL,
+                enabled: !closing,
+                reason: closing_only(NEW_LABEL),
                 run: Editor::request_new,
             },
             FileAction {
-                label: "Open...",
+                label: OPEN_LABEL,
+                hint: Some(OPEN_HINT),
+                chord: (Key::O, false),
+                strip: true,
                 icon: UiIcon::FileOpen,
-                tooltip: "Open a scene...",
-                enabled: true,
-                reason: None,
+                tooltip: OPEN_LABEL,
+                enabled: !closing,
+                reason: closing_only(OPEN_LABEL),
                 run: Editor::open_dialog,
             },
             FileAction {
-                label: "Save",
+                label: SAVE_LABEL,
+                hint: Some(SAVE_HINT),
+                chord: (Key::S, false),
+                strip: true,
                 icon: UiIcon::FileSave,
-                tooltip: "Save the scene",
-                enabled: self.files.save_available(),
-                reason: read_only_reason,
+                tooltip: SAVE_LABEL,
+                enabled: !closing && self.files.save_available(),
+                reason: reason_for(SAVE_LABEL),
                 run: |editor| editor.native_operation(Operation::SaveScene),
+            },
+            FileAction {
+                label: SAVE_AS_LABEL,
+                hint: Some(SAVE_AS_HINT),
+                chord: (Key::S, true),
+                strip: false,
+                icon: UiIcon::FileSave,
+                tooltip: SAVE_AS_LABEL,
+                enabled: !closing && self.files.save_as_available(),
+                reason: reason_for(SAVE_AS_LABEL),
+                run: Editor::save_as_dialog,
             },
         ]
     }
@@ -149,7 +263,7 @@ impl Editor {
             ui.menu_button("File", |ui| {
                 for action in self.file_actions() {
                     let mut response =
-                        ui.add_enabled(action.enabled, egui::Button::new(action.label));
+                        ui.add_enabled(action.enabled, egui::Button::new(action.menu_text()));
                     if let Some(reason) = action.reason.as_deref() {
                         response = response.on_disabled_hover_text(reason);
                     }
@@ -158,20 +272,14 @@ impl Editor {
                         (action.run)(self);
                     }
                 }
-                let mut save_as = ui.add_enabled(
-                    self.files.save_as_available(),
-                    egui::Button::new("Save As..."),
-                );
-                if let Some(reason) = read_only_reason {
-                    save_as = save_as.on_disabled_hover_text(reason);
-                }
-                if save_as.clicked() {
-                    ui.close();
-                    self.save_as_dialog();
-                }
                 unsupported(ui, "Export...");
                 ui.separator();
-                if ui.button("Close").clicked() {
+                let closing = self.files.is_closing();
+                let mut close = ui.add_enabled(!closing, egui::Button::new("Close"));
+                if closing {
+                    close = close.on_disabled_hover_text(unavailable_while_closing("Close"));
+                }
+                if close.clicked() {
                     ui.close();
                     self.request_close();
                 }
@@ -195,7 +303,7 @@ impl Editor {
                     .add_enabled(
                         self.history.can_redo(),
                         egui::Button::new(format!(
-                            "Redo {}   Ctrl/Cmd Shift Z",
+                            "Redo {}   Ctrl/Cmd Y",
                             self.history.redo_label().unwrap_or_default()
                         )),
                     )
@@ -224,16 +332,29 @@ impl Editor {
                 }
             });
             ui.menu_button("Create", |ui| {
-                for (primitive, label) in [
-                    (Primitive::Cube, "Polygon cube"),
-                    (Primitive::Plane, "Polygon plane"),
-                    (Primitive::Sphere, "Polygon sphere"),
-                    (Primitive::Cylinder, "Polygon cylinder"),
-                    (Primitive::Cone, "Polygon cone"),
-                ] {
-                    self.create_row(ui, primitive, label, read_only_reason);
-                }
-                unsupported(ui, "Other primitives");
+                ui.menu_button(POLYGON_PRIMITIVES_MENU, |ui| {
+                    // Toggles per Maya-Modeling GUID-6D21314A-54AD-41D4-AFC0-AAED13CD50A6; their
+                    // position and the unchecked Exit on Completion default are PROVISIONAL.
+                    for (label, reason) in [
+                        ("Interactive Creation", INTERACTIVE_CREATION_REASON),
+                        ("Exit on Completion", EXIT_ON_COMPLETION_REASON),
+                    ] {
+                        ui.add_enabled(false, egui::Checkbox::new(&mut false, label))
+                            .on_disabled_hover_text(reason);
+                    }
+                    ui.separator();
+                    for (label, primitive) in POLYGON_PRIMITIVES {
+                        match primitive {
+                            Some(primitive) => {
+                                self.create_row(ui, primitive, label, read_only_reason);
+                            }
+                            None => {
+                                ui.add_enabled(false, egui::Button::new(label))
+                                    .on_disabled_hover_text(unbuilt_primitive_reason(label));
+                            }
+                        }
+                    }
+                });
             });
             ui.menu_button("Select", |ui| {
                 if ui.button("Object / Component   F8").clicked() {

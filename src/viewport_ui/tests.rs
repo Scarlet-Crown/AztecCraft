@@ -791,7 +791,9 @@ fn fractional_capture_click_handle_and_submission_share_the_same_physical_aspect
         let ndc = input.click_ndc().unwrap();
         assert!((ndc.x - 40.0 / size[0] as f32).abs() < 2e-6);
         assert!(ndc.y.abs() < 2e-6);
-        let capture = input.move_capture(&camera).unwrap();
+        let capture = input
+            .move_capture(&camera, ManipulatorSize::default())
+            .unwrap();
         let pixel = capture
             .pointer_pixel(Vec2::new(pointer.x, pointer.y))
             .unwrap();
@@ -959,4 +961,128 @@ fn plain_middle_and_right_drags_leave_the_camera_unbound_and_alt_still_navigates
             (true, _) => assert!(matches!(operations.as_slice(), [Operation::Dolly { .. }])),
         }
     }
+}
+
+fn primary(pos: Pos2, pressed: bool, modifiers: Modifiers) -> Event {
+    Event::PointerButton {
+        pos,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers,
+    }
+}
+
+/// Press, drag past the threshold, then release; returns the release frame's input and
+/// whether any frame of the drag emitted an Orbit.
+fn drag_release(
+    press: Modifiers,
+    during: Modifiers,
+    release: Modifiers,
+    move_distance: f32,
+) -> (ViewportInput, bool) {
+    let context = egui::Context::default();
+    let camera = camera();
+    let start = egui::pos2(64.0, 48.0);
+    let end = start + egui::vec2(move_distance, 0.0);
+    let clip = Rect::EVERYTHING;
+    capture_frame(
+        &context,
+        &camera,
+        raw(0.0, press, vec![Event::PointerMoved(start)]),
+        clip,
+    );
+    let mut orbited = false;
+    let mut step = |time, modifiers, events| {
+        let (mut input, _) = capture_frame(&context, &camera, raw(time, modifiers, events), clip);
+        orbited |= input
+            .take_navigation()
+            .iter()
+            .any(|operation| matches!(operation, Operation::Orbit { .. }));
+        input
+    };
+    step(0.1, press, vec![primary(start, true, press)]);
+    step(0.2, press, vec![Event::PointerMoved(end)]);
+    step(
+        0.25,
+        during,
+        vec![Event::PointerMoved(end + egui::vec2(4.0, 0.0))],
+    );
+    let input = step(0.3, release, vec![primary(end, false, release)]);
+    (input, orbited)
+}
+
+#[test]
+fn plain_drag_release_raises_marquee_but_a_quick_click_does_not() {
+    let (input, orbited) = drag_release(Modifiers::NONE, Modifiers::NONE, Modifiers::NONE, 40.0);
+    assert_eq!(
+        input.unsupported_selection(),
+        Some(SelectionRefusal::Marquee)
+    );
+    assert!(!orbited && input.click_ndc().is_none());
+    let (input, _) = drag_release(Modifiers::NONE, Modifiers::NONE, Modifiers::NONE, 0.0);
+    assert!(input.click_ndc().is_some());
+    assert_eq!(input.unsupported_selection(), None);
+}
+
+#[test]
+fn alt_drag_orbits_without_marquee_even_when_alt_is_released_before_the_button() {
+    for release in [Modifiers::ALT, Modifiers::NONE] {
+        let (input, orbited) = drag_release(Modifiers::ALT, Modifiers::ALT, release, 40.0);
+        assert!(orbited);
+        assert_eq!(input.unsupported_selection(), None, "{release:?}");
+    }
+}
+
+#[test]
+fn shift_click_keeps_modified_click() {
+    let (input, _) = drag_release(Modifiers::SHIFT, Modifiers::SHIFT, Modifiers::SHIFT, 0.0);
+    assert_eq!(
+        input.unsupported_selection(),
+        Some(SelectionRefusal::ModifiedClick)
+    );
+}
+
+#[test]
+fn marquee_follows_the_release_event_modifiers_not_the_frame_modifiers() {
+    let (input, orbited) = drag_release(Modifiers::NONE, Modifiers::NONE, Modifiers::ALT, 40.0);
+    assert!(!orbited);
+    assert_eq!(input.unsupported_selection(), None);
+
+    let context = egui::Context::default();
+    let camera = camera();
+    let start = egui::pos2(64.0, 48.0);
+    let end = start + egui::vec2(40.0, 0.0);
+    let clip = Rect::EVERYTHING;
+    let none = Modifiers::NONE;
+    for (time, events) in [
+        (0.0, vec![Event::PointerMoved(start)]),
+        (0.1, vec![primary(start, true, none)]),
+        (0.2, vec![Event::PointerMoved(end)]),
+    ] {
+        capture_frame(&context, &camera, raw(time, none, events), clip);
+    }
+    let (input, _) = capture_frame(
+        &context,
+        &camera,
+        raw(
+            0.3,
+            none,
+            vec![
+                primary(end, false, none),
+                Event::ModifiersChanged(Modifiers::ALT),
+            ],
+        ),
+        clip,
+    );
+    assert_eq!(
+        input.unsupported_selection(),
+        Some(SelectionRefusal::Marquee)
+    );
+}
+
+#[test]
+fn alt_pressed_mid_drag_orbits_without_marquee() {
+    let (input, orbited) = drag_release(Modifiers::NONE, Modifiers::ALT, Modifiers::NONE, 40.0);
+    assert!(orbited);
+    assert_eq!(input.unsupported_selection(), None);
 }

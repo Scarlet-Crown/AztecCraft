@@ -1858,3 +1858,133 @@ fn editor_move_begins_on_a_sited_identity_node() {
     ));
     assert!(editor.history.active_manipulation().is_some());
 }
+
+const MARQUEE_STATUS: &str = "Marquee (drag) selection is not implemented yet; click to select";
+
+fn drag(editor: &mut Editor, context: &egui::Context, from: Pos2, to: Pos2) {
+    let size = egui::vec2(1440.0, 900.0);
+    frame(
+        editor,
+        context,
+        raw(size, Pos2::ZERO, 1.0, button(from, true)),
+    );
+    frame(
+        editor,
+        context,
+        raw(size, Pos2::ZERO, 1.0, vec![Event::PointerMoved(to)]),
+    );
+    frame(
+        editor,
+        context,
+        raw(size, Pos2::ZERO, 1.0, button(to, false)),
+    );
+}
+
+#[test]
+fn drag_off_a_handle_shows_the_marquee_refusal_and_on_a_handle_does_not() {
+    let (mut editor, context, rect) = setup(1.0);
+    let from = rect.center() + egui::vec2(-300.0, 200.0);
+    drag(&mut editor, &context, from, from + egui::vec2(60.0, 30.0));
+    assert_eq!(editor.status, MARQUEE_STATUS);
+
+    let (mut editor, context, rect) = setup(1.0);
+    let node = editor.selected.unwrap();
+    let from = rect.center() + egui::vec2(40.0, 0.0);
+    drag(&mut editor, &context, from, from + egui::vec2(60.0, 0.0));
+    assert_ne!(editor.status, MARQUEE_STATUS);
+    assert!(editor.history.active_manipulation().is_none());
+    let translation = editor
+        .history
+        .scene()
+        .node(node)
+        .unwrap()
+        .transform()
+        .translation;
+    assert!(translation[0] > 0.0, "{translation:?}");
+}
+
+#[test]
+fn face_mode_refusal_wins_over_marquee_for_a_manipulator_drag() {
+    let (mut editor, context, rect) = setup(1.0);
+    editor.native_operation(Operation::SetSelectionMode(SelectionMode::Face));
+    let from = rect.center() + egui::vec2(40.0, 0.0);
+    drag(&mut editor, &context, from, from + egui::vec2(60.0, 0.0));
+    assert_eq!(editor.status, FACE_MODE_REFUSAL);
+}
+
+fn drag_with(
+    editor: &mut Editor,
+    context: &egui::Context,
+    from: Pos2,
+    to: Pos2,
+    modifiers: Modifiers,
+) {
+    let size = egui::vec2(1440.0, 900.0);
+    let with = |mut events: Vec<Event>| {
+        events.insert(0, Event::ModifiersChanged(modifiers));
+        raw(size, Pos2::ZERO, 1.0, events)
+    };
+    let press = |position: Pos2, pressed: bool| Event::PointerButton {
+        pos: position,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers,
+    };
+    frame(
+        editor,
+        context,
+        with(vec![Event::PointerMoved(from), press(from, true)]),
+    );
+    frame(editor, context, with(vec![Event::PointerMoved(to)]));
+    frame(
+        editor,
+        context,
+        with(vec![Event::PointerMoved(to), press(to, false)]),
+    );
+}
+
+fn select_tool_editor() -> (Editor, egui::Context, Rect) {
+    let (mut editor, context, rect) = setup(1.0);
+    editor.native_operation(Operation::SetActiveTool(ActiveTool::Select));
+    frame(
+        &mut editor,
+        &context,
+        raw(egui::vec2(1440.0, 900.0), Pos2::ZERO, 1.0, vec![]),
+    );
+    (editor, context, rect)
+}
+
+#[test]
+fn a_plain_drag_after_an_orbit_drag_still_shows_the_marquee_refusal() {
+    let (mut editor, context, rect) = select_tool_editor();
+    let from = rect.center() + egui::vec2(-300.0, 200.0);
+    let to = from + egui::vec2(60.0, 30.0);
+    drag_with(&mut editor, &context, from, to, Modifiers::ALT);
+    assert_ne!(editor.status, MARQUEE_STATUS);
+    drag_with(&mut editor, &context, from, to, Modifiers::NONE);
+    assert_eq!(editor.status, MARQUEE_STATUS);
+    assert!(!editor.error);
+}
+
+#[test]
+fn a_marquee_drag_over_an_object_leaves_selection_and_history_untouched() {
+    let (mut editor, context, rect) = select_tool_editor();
+    let selected = editor.selected;
+    assert!(selected.is_some());
+    let dirty = editor.is_dirty();
+    let undo = editor.history.undo_label();
+    let redo = editor.history.can_redo();
+    let from = rect.center();
+    drag_with(
+        &mut editor,
+        &context,
+        from,
+        from + egui::vec2(60.0, 30.0),
+        Modifiers::NONE,
+    );
+    assert_eq!(editor.status, MARQUEE_STATUS);
+    assert_eq!(editor.selected, selected);
+    assert_eq!(editor.is_dirty(), dirty);
+    assert_eq!(editor.history.undo_label(), undo);
+    assert_eq!(editor.history.can_redo(), redo);
+}

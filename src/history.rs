@@ -69,13 +69,14 @@ impl Command {
             Self::Remove(_) => "Delete".to_string(),
             Self::Rename { .. } => "Rename".to_string(),
             Self::SetTransform { transform, .. } => {
-                // Compare with default values to guess the action.
-                if transform.rotation.iter().any(|&v| v != 0.0)
-                    && transform.scale == [1.0, 1.0, 1.0]
-                {
+                let rotation_changed = transform.rotation.iter().any(|&v| v != 0.0);
+                let scale_changed = transform.scale.iter().any(|&v| v != 1.0);
+                if rotation_changed && !scale_changed {
                     "Rotate".to_string()
-                } else if transform.scale.iter().any(|&v| v != 1.0) {
+                } else if scale_changed && !rotation_changed {
                     "Scale".to_string()
+                } else if rotation_changed && scale_changed {
+                    "Transform".to_string()
                 } else {
                     "Move".to_string()
                 }

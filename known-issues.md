@@ -1,5 +1,29 @@
 # Known limitations
 
+## Manipulator size is PROVISIONAL and session-only
+
+**Severity:** low
+**Area:** viewport manipulators
+**Issue:** cristim/AztecCraft#165
+
+The + and - keys and `set_manipulator_size` set one global size from 0.1 to 10 for the Move,
+Rotate and Scale manipulators (Maya's Global scale). No parity with Maya is claimed. The Maya docs
+state the range but not the default, the step, key repeat or persistence, so these are PROVISIONAL:
+default 1.0, keys step on the 1.25^k grid (integer k from -10 to 10, 0.107 to 9.313 when shown, so round
+trips are exact), key repeat steps again, and the size is session-only (no preferences store; it
+never dirties the scene or enters history). The MCP tool accepts any value from 0.1 to 10, rounded to three decimals; a later key step moves to the next grid value in its direction that changes the three-decimal value. A key step stores the raw grid value, so an exact tie such as 1.5625 rounds to 1.563 for stepping but is stored as 1.5625.
+
+- The drawn length is `max(72 * size, 36)` px before the view foreshortening, so below size 0.5 the
+  manipulator stops shrinking on screen. A foreshortened axis (#155) can still become hard to pick.
+- The arrowhead, boxes, centre zones and pick radius stay fixed in pixels.
+- At very large sizes with a wide field of view, ring segments behind the camera are dropped rather
+  than near-clipped, and the hemisphere cull is approximate.
+- Unsupported: the Preferences Manipulators page, Handle size and Line size (`manipOptions
+  -handleSize` and `-lineSize`).
+- Plain-text focus keeps the keys for the field (the shortcut gate returns early while a text field
+  wants keyboard input); this is checked by code reading only, with no test. Native QA covered + and -
+  resizing the Move manipulator, not text-field focus.
+
 ## Material data editing is a bounded candidate
 
 The native Common Material Attributes/Diffuse control and `set_material_diffuse`
@@ -32,7 +56,9 @@ Attributes, rotate and scale pivots, limits, visibility editing and material ass
 visibly unsupported, and Shear, Rotate Order, Rotate Axis and the pivot translations are shown
 read-only with no edit control. Maya's default modifier is Ctrl on every platform; AztecCraft
 uses an explicit Ctrl modifier rather than its `modifiers.command` convention, and the macOS
-Cmd-versus-Ctrl behavior is unverified. Native visual verification is pending.
+Cmd-versus-Ctrl behavior is unverified. Native visual verification is pending. The body
+scrolls with the wheel; Alt+middle-drag and Ctrl+Alt+middle-drag panning and wheel-over-tabs
+node switching (Maya 2027 Attribute Editor page) are unsupported.
 
 ## Reference baseline unavailable
 
@@ -115,8 +141,9 @@ validation doesn't repair geometry or guarantee rendering fidelity.
 The camera core is connected to a depth-tested opaque GPU geometry viewport with hardware clipping. Materials, transparency, normal shading, textures, document color management and reference navigation parity remain pending. Backend failures remain explicit with no CPU fallback. These limits are described in [development instructions](.project-docs/development.md).
 
 Checked source appearance summaries now distinguish supported immutable source
-associations from unavailable or unbound shapes in the Channel Box and MCP
-inspection. They do not evaluate materials, resolve texture assets, prove
+associations from unavailable or unbound shapes in the Help Line's "Scene
+diagnostics" header, also shown in the Attribute Editor body while a node is
+selected, and in MCP inspection. They do not evaluate materials, resolve texture assets, prove
 quadratic-filter equivalence or provide a color processor. The geometry preview
 continues to report incomplete appearance; correct display and Maya comparison
 remain acceptance work.
@@ -316,12 +343,24 @@ Native testing of the initial nine-tool server reproduced repeated reply deadlin
 
 The revised hidden logic path and retained-input guard pass actual trait-callback tests, and [scoped macOS native verification](.project-docs/mcp-native-verification.md) confirmed minimized requests at source `36dffdf`. In the combined icon/MCP build `541c72c`, an idle request reached its UI reply deadline. A main-thread sample taken during investigation included Metal drawable acquisition, without establishing overlap with the timed-out request or a five-second acquisition wait; the next request recovered in the same process and scene token. The underlying cause remains unproven. These results do not establish unconditional idle/background responsiveness or other-platform native behavior.
 
-## macOS application quit guard unverified
+## macOS Dock Quit, logout and shutdown bypass the unsaved-changes guard
 
 **Severity:** medium
 **Area:** native document lifecycle
 
-Pinned winit 0.30.13 gives the default Quit menu item the `terminate:` action and Command-Q equivalent (macOS menu.rs:66–73). Its application termination callback calls window-exit notification and internal exit (app_state.rs:65–71,166–172), while window Close separately queues CloseRequested (window_delegate.rs:144–148). Native testing of Command-Q with a synthetic dirty scene remains pending; no data loss has been demonstrated. The hidden-dispatch change guards viewport Close and does not establish interception of application termination.
+Cmd-Q, the AztecCraft > Quit menu item, Dock Quit, Quit All from the Apple menu, logout and shutdown all send `terminate:`. `crates/macos-quit-menu` adds an `applicationShouldTerminate:` method to winit's application delegate at startup (additive `class_addMethod`; the launch aborts with a printed error if the selector already exists or the delegate shape changed; winit is pinned to 0.30.13 and `tests/winit_pin.rs` fails if the lock moves). The hook replies "terminate later", asks the app to close the front window through the shared close guard (#11), and answers AppKit with the user's choice, so each of those paths is designed to show the Save/Discard/Cancel prompt (native coverage is listed below). The earlier `performClose:` retarget of the Quit item is retired. With no key window the hook picks the window itself, which should stop the Cmd-Q beep (native check pending).
+
+Fallbacks, all deliberate:
+- If a terminate is owed and `request_close` is refused for good (an invalid text draft or an active manipulation), the app declines the terminate: a logout or shutdown is aborted instead of hanging, and the user fixes the draft and quits again.
+- If a terminate arrives after a viewport close was already sent, the app declines it to avoid a double exit: a logout is cancelled, but the app still exits through the close already in flight, with no data lost.
+- While a deferred AppKit reply is still queued, a new `terminate:` is declined instead of begun, so the stale answer cannot cancel a new request (#268).
+- A `terminate:` that arrives while an AppKit modal is up (an rfd Open or Save panel runs a nested `runModal` inside the frame, so the reply could never be sent) is declined with a stderr line naming #268, so the app does not hang (#268). Native proof covers a Dock quit with the Open panel up; the Save panel uses the same check and is covered only headlessly. PROVISIONAL (the Maya docs do not cover OS quit with a dialog open): the dialog stays up, and an open panel therefore aborts logout and shutdown.
+- Limit: the hook checks only `NSApplication.modalWindow`. Every rfd panel in the tree runs `runModal`, which sets it. Any future nested event loop inside a frame that does not set `modalWindow` would bring the hang back.
+- A panic on the main thread while a terminate reply is owed declines the terminate through a chained panic hook, so the panic ends the process instead of hanging in AppKit's wait (#270). PROVISIONAL: the declined OS action (logout or shutdown) is aborted. A panic on a background thread does not answer, because the app keeps running and the user can still finish the quit.
+- A panic right after `finish_terminate(true)` has queued an approve reply leaves that reply in flight while the panic unwinds; the hook acts only while a reply is owed (#270).
+- Save on logout, restart or shutdown is accepted as aborting the OS action when the prompt cannot complete (owner decision on #261).
+
+SIGTERM (macOS and Linux) starts the same close guard. PROVISIONAL policy: the first SIGTERM prompts, a second SIGTERM before the prompt is resolved exits at once with status 143, and an unattended dirty scene waits for an answer (autosave or recovery is a separate issue). SIGINT and SIGHUP still kill the process directly; routing them through the guard is out of scope for #261. Native results and the remaining checklist are in [native-verification.md](.project-docs/native-verification.md); a real logout, Save, the Quit menu click and Linux SIGTERM are not yet verified natively.
 
 ## Bounded World-axis Move candidate
 
@@ -407,7 +446,7 @@ snaps, symmetry, construction history, render buttons, Hypershade and the input 
 cluster therefore follows the last drawn group.
 
 - The F2 to F6 menu-set hotkeys are deferred.
-- No Layer Editor exists, so the toggle shows or hides only the Channel Box.
+- No Layer Editor exists, so the toggle shows or hides only the Channel Box; its hover and a Layers stub in the panel say so.
 - The toggle is disabled during an active manipulation, including a remote one with no native gesture, like other edits.
 - Save As has no strip button and stays in the File menu.
 - Open's native dialog calls `rfd` directly and cannot be click-tested, so equivalence between the strip
@@ -425,7 +464,7 @@ Tracked in the UI parity inventory (`.project-docs/ui-parity-inventory.md`, sect
 
 ## Poly Sphere is provisional (#43)
 
-Create > Polygon sphere and `create_primitive` with `sphere` build a radius-1,
+Create > Polygon Primitives > Sphere and `create_primitive` with `sphere` build a radius-1,
 20x20, Y-axis sphere (382 points, 780 edges, 400 faces: 40 pole triangles and
 360 quads). The radius and subdivisions come from the polySphere node reference;
 the command page lists radius 0.5, and Maya 2026 defaults are unverified (#5).
@@ -465,7 +504,7 @@ rotateX and rotateY by about the same amount, and one of them is snapped away.
 
 ## Poly Cylinder and Poly Cone are provisional (#43)
 
-Create > Polygon cylinder and cone, and `create_primitive` with `cylinder` or `cone`,
+Create > Polygon Primitives > Cylinder and Cone, and `create_primitive` with `cylinder` or `cone`,
 build radius-1, height-2 (y from -1 to 1), Y-axis solids with 20 axis divisions,
 1 height division and no cap subdivisions. The cylinder is the sc=0 variant (node-page
 default) with 40 points, 60 edges, 22 faces and two true 20-gon caps; the command page
@@ -582,7 +621,7 @@ Rotate angle in the scene angular unit and the native numeric field takes degree
 ## Primitive creation options are partial and PROVISIONAL (#174)
 
 `create_primitive` accepts size, subdivision and axis (X, Y or Z) options for cube, plane,
-sphere, cylinder and cone, and each Create menu row has an option box that opens a
+sphere, cylinder and cone, and each built Create > Polygon Primitives row has an option box that opens a
 "Polygon <name> Options" window (native visual QA pending). Its numeric fields are text-only, without the drag-to-scrub
 and sliders Maya's option boxes have (PROVISIONAL gap). Keeping the window open after Create
 and using the last created options for plain menu and shelf clicks are PROVISIONAL (Maya's
@@ -591,7 +630,8 @@ primitives are still not persisted: Save is unavailable for created scenes. The 
 limits (size 1e-6 to 1e6 cm, subdivisions up to 128, at most 20,000 faces) are safety bounds,
 PROVISIONAL because the Maya pages state no ranges, until the pinned reference install (#5).
 Not supported: cylinder and cone cap divisions and round cap, UVs and texture mapping,
-interactive creation, Free and Camera axis, and editing the options after creation (no
+interactive creation and Exit on Completion (both are disabled rows in Create > Polygon
+Primitives and in the options window; their drawn unchecked state is PROVISIONAL, no default is cited), Free and Camera axis, and editing the options after creation (no
 construction history). The plane default is 1x1 with 10x10 subdivisions (#176), PROVISIONAL:
 the polyPlane node page lists sw/sh 10 (the command page lists sw 10 and sx/sy 5), and
 Maya 2025.1 creates 10x10 through both `polyPlane` and Create > Polygon Primitives > Plane.
@@ -689,3 +729,63 @@ profile from it), or Maya rejects, repairs or rewrites these files (issue #5 ask
 Delete refuses any node with children or a parent (`unsupported_delete`), natively and over MCP.
 Maya's exact Delete semantics for hierarchies are PROVISIONAL: only the 2024 Delete help page was
 found and no 2026 page exists. Real hierarchy delete is blocked on a structural source rewriter.
+
+## Marquee drag feedback has PROVISIONAL edge cases
+
+**Severity:** low
+**Area:** viewport input
+**Issue:** cristim/AztecCraft#168
+
+A plain primary drag in the viewport ends with the status "Marquee (drag) selection is not
+implemented yet; click to select", because the real marquee (#30) is missing. The message is decided
+per drag from egui's drag state and the release event's modifiers. These cases are PROVISIONAL and
+unverified against Maya:
+
+- A stationary press held longer than 0.8 s can count as a drag in egui 0.36 (only if some frame
+  lands during the hold) and then shows the message; egui does not treat such a press as a click
+  either way.
+- Releasing Alt before the drag threshold is crossed shows the message, because no Orbit was emitted.
+- A fast flick whose press, move and release coalesce into one frame is not seen as a drag and shows
+  nothing.
+- Alt held only on the release event, with no Orbit during the drag, is silent.
+- A drag that starts in the viewport and ends over another panel shows the message.
+
+## Disabled Create menu rows expose their reason by hover only
+
+Create > Polygon Primitives shows the reason on its 12 disabled rows (unbuilt primitives and the two
+interactive toggles) as an egui hover tooltip. egui does not copy `on_disabled_hover_text` into the
+AccessKit node and disabled widgets cannot take keyboard focus, so keyboard and screen-reader users never
+get the reason. Edit > Delete by Type and Delete All by Type share this limitation.
+
+## File and Redo hotkeys use Command on macOS without a documented glyph
+
+Ctrl/Cmd N, O, S, Shift+S and Y follow the Maya hotkeys page, which shows the macOS alternate modifier
+as an image the documentation fetch could not read, so Command on macOS is PROVISIONAL. Held file
+chords no longer repeat; Cmd+S used to. Open Scene and Save Scene As have no trailing ellipsis because the
+docs give bare names (PROVISIONAL).
+
+Held Ctrl/Cmd Z and Ctrl/Cmd Y keep repeating Undo and Redo (egui reports OS key repeat), capped at
+one step per frame, so the rate is frame-rate bound. Keys that ignore repeat: the file chords N, O, S
+and Shift+S (menus.rs:128), Q/W/E/R (shortcuts.rs:26), 4/5/6/7 (shortcuts.rs:44), Alt+Home
+(shortcuts.rs:74), A (shortcuts.rs:95) and Ctrl+A (shortcuts.rs:108). Keys that repeat besides Undo
+and Redo: the manipulator size keys +, = and - (shortcuts.rs:52), F (shortcuts.rs:83), Escape
+(shortcuts.rs:192, idempotent), and F8/F9/F10/F11 and Delete (panels.rs:48-62, no repeat filter). Not
+reviewed against Maya: a held Delete or F8-F11 repeats. The Maya 2027 hotkeys page lists Ctrl z and Ctrl y
+(https://help.autodesk.com/cloudhelp/2027/ENU/Maya-KeyboardShortcuts/files/GUID-30CACC9D-8FBE-4B85-8A8F-C5ADF32DDD4E.htm)
+but does not say whether a held key repeats, so the repeat is PROVISIONAL and no Maya parity is claimed.
+It is the behaviour before #283; a test pins it. File chords ignore repeat to avoid a second dialog or
+New, which does not apply to history steps.
+
+## Default View pose and view history are unverified
+
+The Default View row and Alt+Home restore AztecCraft's own default camera (target 0, yaw 0.6 rad,
+pitch 0.4 rad, distance 8). Maya documents no default perspective pose, so the pose is not
+compared with Maya: PROVISIONAL. Default View restores only the pose (target, distance, yaw,
+pitch); the far clip plane, which framing can grow, is not reset. Fn+Option+Left as Alt+Home on compact Mac keyboards is unchecked.
+Maya's Undo/Redo View Change, the `[` and `]` view history and View > Bookmarks are not
+implemented; camera changes create no undo entries (see Core authoring limits).
+
+Set Camera Pose and `set_camera_pose` judge Changed/Unchanged numerically, so -0.0 over 0.0 (target, yaw or
+pitch) replies Unchanged while the stored sign bits flip; the view renders identically and inspect may show
+-0. Move-handle drag capture compares bits (`same_capture`), so the flip can only cancel a live drag
+conservatively, and the human-input guard keeps remote camera operations out of a held drag.

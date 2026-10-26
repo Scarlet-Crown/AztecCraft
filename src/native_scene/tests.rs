@@ -305,6 +305,15 @@ fn grouped_transform_and_pivots_preserve_native_precision_without_baking() {
 }
 
 #[test]
+fn remove_validates_the_scene_before_any_mutation() {
+    let (mut scene, id) = cube();
+    scene.nodes[0].rotate_pivot[0].value = f64::NAN;
+    let before = scene.clone();
+    assert_eq!(scene.remove(id), Err(NativeError::NonFinite));
+    assert_eq!(scene, before);
+}
+
+#[test]
 fn shared_shape_extrusion_changes_one_owner_and_checks_the_other_instance() {
     let (mut scene, first, second, shape) = shared_shape();
     let links = scene.dag.clone();
@@ -1021,4 +1030,69 @@ fn root_transform_resolves_the_top_of_any_valid_path_and_refuses_others() {
         scene.root_transform(&too_deep),
         Err(NativeError::ResourceLimit)
     );
+}
+
+#[test]
+fn hierarchy_refusal_wins_over_a_restricted_ancestor_or_descendant() {
+    for restricted in [0, 1] {
+        let (mut scene, root, child, _) = grouped_shape();
+        let at = scene
+            .nodes
+            .iter()
+            .position(|node| node.id == [root, child][restricted])
+            .unwrap();
+        scene.nodes[at]
+            .unsupported_transform
+            .push("unproved effect".into());
+        let before = scene.clone();
+        assert_eq!(
+            scene.remove(root),
+            Err(NativeError::UnsupportedDelete(
+                DeleteUnsupported::HasChildren
+            ))
+        );
+        assert_eq!(
+            scene.remove(child),
+            Err(NativeError::UnsupportedDelete(DeleteUnsupported::IsChild))
+        );
+        assert_eq!(scene, before);
+    }
+}
+
+#[test]
+fn read_only_format_wins_over_the_hierarchy_refusal_on_an_ascii_scene() {
+    let (mut scene, root, child, _) = grouped_shape();
+    retain(&mut scene, b"original", std::iter::once(0..8).collect());
+    let before = scene.clone();
+    for id in [root, child] {
+        assert_eq!(scene.remove(id), Err(NativeError::ReadOnlyFormat));
+    }
+    assert_eq!(scene, before);
+}
+
+#[test]
+fn missing_node_on_a_binary_source_scene_is_missing_node_not_unsupported_edit() {
+    let binary = |scene: &mut NativeScene| {
+        scene.source = Some(SourceRetention {
+            sites: Vec::new(),
+            bytes: std::sync::Arc::from(&b"original"[..]),
+            format: SourceFormat::Binary,
+            records: std::iter::once(0..8).collect(),
+            leaves: Vec::new(),
+            appearance: None,
+        });
+        scene.validate().unwrap();
+    };
+    let (mut scene, gone) = cube();
+    scene.remove(gone).unwrap();
+    binary(&mut scene);
+    let before = scene.clone();
+    assert_eq!(
+        scene.remove(gone),
+        Err(SceneError::MissingNode(gone).into())
+    );
+    assert_eq!(scene, before);
+    let (mut scene, present) = cube();
+    binary(&mut scene);
+    assert_eq!(scene.remove(present), Err(NativeError::UnsupportedEdit));
 }
