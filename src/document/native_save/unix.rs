@@ -1,11 +1,7 @@
 use super::{NativeSaveError as Error, SaveDestination, SaveOutcome, SaveReceipt};
 use crate::{
     document::{LinkStatus, MAX_DOCUMENT_BYTES, NativeOrigin, SourceBaseline},
-    native_scene::{
-        NativeScene,
-        ascii::write::emit_geometry_prefix,
-        binary,
-    },
+    native_scene::{NativeScene, ascii::write::emit_geometry_prefix, binary},
 };
 use craft_atomic::{AtomicFs, NewFilePermissions, RenameRetry, WriteOptions};
 use rustix::fs::{self, AtFlags, Mode, OFlags};
@@ -73,7 +69,7 @@ impl Destination {
         destination.binding()?;
         Ok(destination)
     }
-        pub(in crate::document) fn path(&self) -> PathBuf {
+    pub(in crate::document) fn path(&self) -> PathBuf {
         self.canonical_parent.join(&self.leaf)
     }
     fn binding(&self) -> io::Result<()> {
@@ -362,7 +358,12 @@ impl AtomicFs for Transaction<'_> {
     }
     fn create_new(&self, path: &Path, permissions: NewFilePermissions) -> io::Result<File> {
         let leaf = self.destination.stage_leaf(path).map_err(|_| {
-            let error = self.state.borrow().failure.clone().unwrap_or(Error::Unsupported);
+            let error = self
+                .state
+                .borrow()
+                .failure
+                .clone()
+                .unwrap_or(Error::Unsupported);
             self.fail(error)
         })?;
         if let Some(baseline) = self.baseline {
@@ -545,14 +546,14 @@ pub(super) fn save_authored(
     // Maya ASCII reader currently supports a narrower subset (curves only).
     // Opening a saved `.ma` mesh scene back into AztecCraft is not yet supported;
     // it is tracked separately. The file is valid Maya ASCII and opens in Maya.
-    
+
     // Resolve the destination path
     let path = match destination {
         SaveDestination::As(path) => path.to_path_buf(),
         SaveDestination::Active => match origin {
-            NativeOrigin::AuthoredAscii(source) => source
-                .destination_path()
-                .ok_or(Error::Unsupported)?,
+            NativeOrigin::AuthoredAscii(source) => {
+                source.destination_path().ok_or(Error::Unsupported)?
+            }
             _ => return Err(Error::Unsupported),
         },
     };

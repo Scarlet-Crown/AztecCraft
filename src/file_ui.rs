@@ -257,7 +257,7 @@ impl Editor {
             self.open_path(&path);
         }
     }
-        pub(super) fn save_as_dialog(&mut self) {
+    pub(super) fn save_as_dialog(&mut self) {
         if self.history.active_manipulation().is_some() {
             self.status = OperationError::BusyManipulation.to_string();
             self.error = true;

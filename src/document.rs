@@ -68,8 +68,18 @@ impl NativeOrigin {
         #[cfg(unix)]
         {
             match self {
-                Self::Binary(source) if matches!(source.link, LinkStatus::Direct) && source.destination.is_some() => true,
-                Self::AuthoredAscii(source) if matches!(source.link, LinkStatus::Direct) && source.destination.is_some() => true,
+                Self::Binary(source)
+                    if matches!(source.link, LinkStatus::Direct)
+                        && source.destination.is_some() =>
+                {
+                    true
+                }
+                Self::AuthoredAscii(source)
+                    if matches!(source.link, LinkStatus::Direct)
+                        && source.destination.is_some() =>
+                {
+                    true
+                }
                 _ => false,
             }
         }
@@ -77,7 +87,11 @@ impl NativeOrigin {
         false
     }
     pub fn save_as_available(&self) -> bool {
-        cfg!(unix) && matches!(self, Self::Binary(_) | Self::AuthoredAscii(_) | Self::Untitled)
+        cfg!(unix)
+            && matches!(
+                self,
+                Self::Binary(_) | Self::AuthoredAscii(_) | Self::Untitled
+            )
     }
     pub fn kind(&self) -> &'static str {
         match self {

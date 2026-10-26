@@ -1,8 +1,5 @@
 use super::{NativeOrigin, NativeScene};
-use crate::native_scene::{
-    ascii::write::AsciiWriteRefusal,
-    binary,
-};
+use crate::native_scene::{ascii::write::AsciiWriteRefusal, binary};
 use std::{
     fmt, io,
     path::{Path, PathBuf},
@@ -108,9 +105,7 @@ pub fn save_native(
             NativeOrigin::Untitled | NativeOrigin::AuthoredAscii(_) => {
                 unix::save_authored(origin, scene, destination, may_install)
             }
-            _ => {
-                unix::save_native(origin, scene, destination, may_install)
-            }
+            _ => unix::save_native(origin, scene, destination, may_install),
         }
     }
     #[cfg(not(unix))]
