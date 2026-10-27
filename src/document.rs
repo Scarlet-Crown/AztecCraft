@@ -138,6 +138,7 @@ pub fn verify_native_origin(path: &Path, origin: &NativeOrigin) -> Result<(), Na
         let source = match origin {
             NativeOrigin::Binary(source)
             | NativeOrigin::Ascii(source)
+            | NativeOrigin::AuthoredAscii(source)
             | NativeOrigin::Legacy(source) => source,
             NativeOrigin::Untitled => return Err(NativeSaveError::SourceChanged),
         };

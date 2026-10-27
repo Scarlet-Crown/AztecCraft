@@ -1,5 +1,7 @@
 use super::{NativeOrigin, NativeScene};
-use crate::native_scene::{ascii::write::AsciiWriteRefusal, binary};
+#[cfg(any(unix, test))]
+use crate::native_scene::ascii::write::AsciiWriteRefusal;
+use crate::native_scene::binary;
 use std::{
     fmt, io,
     path::{Path, PathBuf},
@@ -28,6 +30,7 @@ pub enum NativeSaveError {
     Cancelled,
     Io(io::ErrorKind),
     Encode(binary::BinaryError),
+    #[cfg(any(unix, test))]
     AsciiWrite(AsciiWriteRefusal),
 }
 
@@ -43,6 +46,7 @@ impl fmt::Display for NativeSaveError {
             Self::Cancelled => f.write_str("save cancelled before installation"),
             Self::Io(kind) => write!(f, "native scene IO failed: {kind:?}"),
             Self::Encode(error) => error.fmt(f),
+            #[cfg(any(unix, test))]
             Self::AsciiWrite(error) => error.fmt(f),
         }
     }
