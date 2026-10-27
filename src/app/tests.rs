@@ -1731,6 +1731,68 @@ fn channel_box_is_blank_with_nothing_selected() {
 }
 
 #[test]
+fn read_only_scene_is_marked_in_the_title_and_file_menu() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("curve.ma");
+    std::fs::write(&path, ascii_fixture::specimen()).unwrap();
+    let mut editor = Editor::default();
+    editor
+        .apply_operation(Operation::OpenScene { path })
+        .unwrap();
+    assert_eq!(editor.document_title(), "AztecCraft | curve.ma (read-only)");
+    let reason = editor.read_only_reason().unwrap();
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    let file = face_text_position(&output, "File");
+    let output = face_pointer_click(&mut editor, &ctx, file, egui::Modifiers::NONE, vec![]);
+    let marker = face_text_position(&output, &format!("Read-only scene: {reason}"));
+    assert!(marker.y < face_text_position(&output, "Close").y);
+
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    assert_eq!(editor.document_title(), "AztecCraft | Untitled *");
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    let file = face_text_position(&output, "File");
+    let output = face_pointer_click(&mut editor, &ctx, file, egui::Modifiers::NONE, vec![]);
+    face_text_position(&output, "Close");
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text.starts_with("Read-only scene")
+    )));
+}
+
+#[test]
+fn unsaved_prompt_for_an_untitled_scene_uses_mayas_wording_and_buttons() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    editor.new_document().unwrap();
+    assert!(editor.files.is_modal());
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    for text in [
+        "Warning: Scene Not Saved",
+        "Save changes to untitled scene?",
+    ] {
+        face_text_position(&output, text);
+    }
+    let buttons: Vec<f32> = ["Save", "Don't Save", "Cancel"]
+        .iter()
+        .map(|label| face_text_position(&output, label).x)
+        .collect();
+    assert!(
+        buttons.windows(2).all(|pair| pair[0] < pair[1]),
+        "{buttons:?}"
+    );
+    // An untitled scene cannot be saved in place yet (Maya would Save As), so Save is inert.
+    let before = editor.history.scene().clone();
+    let save = face_text_position(&output, "Save");
+    face_pointer_click(&mut editor, &ctx, save, egui::Modifiers::NONE, vec![]);
+    assert!(editor.files.is_modal());
+    assert_eq!(editor.history.scene(), &before);
+}
+
+#[test]
 fn help_line_carries_the_read_only_reason_and_curves_note() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("curve.ma");
@@ -4448,7 +4510,7 @@ fn face_native_menu_explicit_face_beats_toggle_and_modal_replacement_drops_inten
     assert!(editor.files.is_modal());
     assert_eq!(editor.selection_mode, SelectionMode::Object);
     let output = frame(&mut editor, &ctx, vec![]);
-    let discard = face_text_position(&output, "Discard");
+    let discard = face_text_position(&output, "Don't Save");
     face_pointer_click(
         &mut editor,
         &ctx,
@@ -8976,12 +9038,12 @@ fn set_camera_pose_changes_only_the_camera_and_reports_unchanged_on_repeat() {
         7.0_f32.rem_euclid(std::f32::consts::TAU)
     );
     assert_eq!(
-        [
-            editor.camera.fov_y(),
+        (
+            editor.camera.lens(),
             editor.camera.near(),
             editor.camera.far()
-        ],
-        [lens.fov_y(), lens.near(), lens.far()]
+        ),
+        (lens.lens(), lens.near(), lens.far())
     );
     let again = remote_pose(&mut editor, token, pose_op(7.0, 0.2, 5.0)).unwrap();
     assert!(matches!(again, OperationReply::Unchanged));
@@ -8989,6 +9051,25 @@ fn set_camera_pose_changes_only_the_camera_and_reports_unchanged_on_repeat() {
     assert_eq!(editor.is_dirty(), dirty);
     assert_eq!(editor.history.scene(), &scene);
     assert_eq!(editor.history.can_undo(), undoable);
+}
+
+#[test]
+fn inspect_fov_tracks_the_viewport_aspect() {
+    let mut editor = Editor::default();
+    for aspect in [1.0_f32, 2.0] {
+        editor.aspect = aspect;
+        let tan_y = if aspect >= 1.4173 / 0.9449 {
+            1.4173_f32 * 25.4 / 70.0 / aspect
+        } else {
+            0.9449_f32 * 25.4 / 70.0
+        };
+        let expected = f64::from(2.0 * tan_y.atan()).to_degrees();
+        let actual = editor.inspect(false).unwrap().camera.fov_y_degrees;
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "aspect {aspect}: {actual}"
+        );
+    }
 }
 
 #[test]
@@ -9149,4 +9230,49 @@ fn alt_home_and_default_view_are_refused_while_modal_or_closing() {
     editor.default_view();
     assert_eq!(editor.camera, disturbed, "menu path while closing");
     assert!(editor.error);
+}
+
+#[test]
+fn selection_mode_camera_tool_and_panel_changes_add_no_undo_entry() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let id = editor.single_target().unwrap().0;
+    remote(
+        &mut editor,
+        Operation::Rename {
+            id,
+            name: "renamed".into(),
+        },
+    )
+    .unwrap();
+    remote(&mut editor, Operation::Undo).unwrap();
+    let undo = editor.history.undo_label();
+    let redo = editor.history.redo_label();
+    assert!(redo.is_some());
+    for operation in [
+        Operation::Select {
+            node: None,
+            instance_path: None,
+        },
+        Operation::Select {
+            node: Some(id),
+            instance_path: None,
+        },
+        Operation::SetSelectionMode(SelectionMode::Hierarchy),
+        Operation::SetSelectionMode(SelectionMode::Object),
+        Operation::Orbit {
+            radians: [0.1, 0.1],
+        },
+        Operation::Pan {
+            world_units: [0.5, 0.5],
+        },
+        Operation::Dolly { factor: 1.5 },
+        Operation::FrameSelected,
+        Operation::SetActiveTool(ActiveTool::Move),
+        Operation::SetGridVisible { visible: false },
+    ] {
+        remote(&mut editor, operation).unwrap();
+        assert_eq!(editor.history.undo_label(), undo);
+        assert_eq!(editor.history.redo_label(), redo);
+    }
 }

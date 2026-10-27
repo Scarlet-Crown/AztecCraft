@@ -1,3 +1,5 @@
+#[cfg(any(test, feature = "mcp"))]
+use super::manipulation_tool::ToolPick;
 use super::manipulation_tool::{
     begin_error, is_manipulation_tool, kind_name, mode_refusal, tool_name,
 };
@@ -5,8 +7,6 @@ use crate::app::Editor;
 use crate::editor_operations::{
     ActiveTool, ManipulationValue, MoveDistance, Operation, OperationError, OperationReply,
 };
-#[cfg(any(test, feature = "mcp"))]
-use azteccraft::native_scene::{RotateAxis, ScaleHandle};
 use azteccraft::{
     history::{
         EditOutcome, ManipulationError, ManipulationFinish, ManipulationId, ManipulationProvenance,
@@ -14,6 +14,11 @@ use azteccraft::{
     manipulator_handles::{RotateDrag, ScaleDrag},
     move_handles::{AxisDrag, HandleError, ViewportCapture, WorldHandles},
     native_scene::{TransformTarget, WorldAxis},
+};
+#[cfg(any(test, feature = "mcp"))]
+use azteccraft::{
+    manipulator_handles::{DisabledKind, Pick},
+    native_scene::{RotateAxis, ScaleHandle},
 };
 use glam::Vec2;
 use uuid::Uuid;
@@ -75,7 +80,7 @@ pub(in crate::app) struct NativeMove {
 // Both fields are read only by the cfg-gated inspect_move below.
 #[cfg_attr(not(any(test, feature = "mcp")), allow(dead_code))]
 pub(in crate::app) struct MoveViewportFeedback {
-    capture: ViewportCapture,
+    pub(in crate::app) capture: ViewportCapture,
     pointer: Option<Vec2>,
 }
 
@@ -94,6 +99,16 @@ fn rotate_axis_id(axis: RotateAxis) -> &'static str {
         RotateAxis::X => "x",
         RotateAxis::Y => "y",
         RotateAxis::Z => "z",
+    }
+}
+
+/// The id `pointer_disabled` reports for a drawn-but-unsupported handle.
+#[cfg(any(test, feature = "mcp"))]
+fn disabled_kind_id(kind: DisabledKind) -> &'static str {
+    match kind {
+        DisabledKind::FreeRotate => "free_rotate",
+        DisabledKind::ViewRing => "view_ring",
+        DisabledKind::ScalePlane => "scale_plane",
     }
 }
 
@@ -538,17 +553,22 @@ impl Editor {
                         .as_ref()
                         .is_some_and(|renderer| renderer.terminal_error().is_some())
             })
-            .and_then(|feedback| frame.as_ref().ok().map(|frame| (feedback, frame)))
-            .map(|(feedback, frame)| {
-                let geometry = WorldHandles::new(&feedback.capture, frame.origin_cm());
+            .filter(|_| mode_refusal("", self.selection_mode).is_none())
+            .map(|feedback| {
+                let geometry = frame.as_ref().map_err(Clone::clone).and_then(|frame| {
+                    WorldHandles::new(&feedback.capture, frame.origin_cm())
+                        .map_err(|error| error.to_string())
+                });
                 let pointer = feedback
                     .pointer
                     .and_then(|pointer| feedback.capture.pointer_pixel(pointer).ok());
-                let pointer_hit = geometry
-                    .as_ref()
-                    .ok()
-                    .and_then(|handles| pointer.and_then(|pixel| handles.hit_test(pixel)))
-                    .map(axis_name);
+                let pick = self.pointer_pick(
+                    &feedback.capture,
+                    feedback
+                        .pointer
+                        .filter(|_| self.history.active_manipulation().is_none()),
+                    geometry.as_ref().ok(),
+                );
                 let axes = match &geometry {
                     Ok(handles) => handles
                         .axes()
@@ -566,14 +586,16 @@ impl Editor {
                         .map(|axis| MoveAxisInspection {
                             axis: axis_name(axis),
                             visible: false,
-                            unavailable_reason: Some(error.to_string()),
+                            unavailable_reason: Some(error.clone()),
                         })
                         .collect(),
                 };
                 MoveViewportInspection {
                     provenance: "last_native_viewport_capture",
                     axes,
-                    pointer_hit,
+                    pointer_hit: pick.hit,
+                    pointer_disabled: pick.disabled,
+                    pointer_refusal: pick.refusal,
                     pointer_available: pointer.is_some(),
                 }
             });
@@ -595,6 +617,74 @@ impl Editor {
             viewport,
         })
     }
+
+    /// The active tool's enabled handle, any unsupported handle and the refusal under the pointer
+    /// pixel, as the ids and text `pointer_hit`, `pointer_disabled` and `pointer_refusal` report.
+    /// Move uses the Move frame's geometry; Rotate and Scale go through the same `pick_handle`,
+    /// `pick_refusal` and frame reason as native hover and press.
+    #[cfg(any(test, feature = "mcp"))]
+    fn pointer_pick(
+        &self,
+        capture: &ViewportCapture,
+        pointer: Option<Vec2>,
+        move_handles: Option<&WorldHandles>,
+    ) -> PointerPick {
+        let none = PointerPick::default();
+        let Some((pointer, pixel)) =
+            pointer.and_then(|pointer| Some((pointer, capture.pointer_pixel(pointer).ok()?)))
+        else {
+            return none;
+        };
+        let tool = self.active_tool;
+        match tool {
+            ActiveTool::Move => PointerPick {
+                hit: move_handles
+                    .and_then(|handles| handles.hit_test(pixel))
+                    .map(axis_name),
+                ..none
+            },
+            ActiveTool::Rotate | ActiveTool::Scale => {
+                let (target, frame) = match self.manipulation_frame_or_reason(tool) {
+                    Ok(found) => found,
+                    // The whole tool is refused at any pixel, as native hover says.
+                    Err(failure) => {
+                        return PointerPick {
+                            refusal: failure.reason(tool),
+                            ..none
+                        };
+                    }
+                };
+                match self.pick_handle(tool, capture, &frame, pixel) {
+                    Some(picked @ ToolPick::Rotate(Pick::Handle(axis))) => PointerPick {
+                        hit: Some(rotate_axis_id(axis)),
+                        refusal: self.pick_refusal(capture, &frame, &target, tool, picked, pointer),
+                        ..none
+                    },
+                    Some(picked @ ToolPick::Scale(Pick::Handle(handle))) => PointerPick {
+                        hit: Some(scale_handle_id(handle)),
+                        refusal: self.pick_refusal(capture, &frame, &target, tool, picked, pointer),
+                        ..none
+                    },
+                    Some(ToolPick::Rotate(Pick::Disabled(kind)))
+                    | Some(ToolPick::Scale(Pick::Disabled(kind))) => PointerPick {
+                        disabled: Some(disabled_kind_id(kind)),
+                        ..none
+                    },
+                    None => none,
+                }
+            }
+            ActiveTool::Select => none,
+        }
+    }
+}
+
+/// What inspection reports for the pointer pixel.
+#[cfg(any(test, feature = "mcp"))]
+#[derive(Default)]
+struct PointerPick {
+    hit: Option<&'static str>,
+    disabled: Option<&'static str>,
+    refusal: Option<String>,
 }
 
 impl Editor {

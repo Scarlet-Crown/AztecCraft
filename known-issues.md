@@ -7,15 +7,21 @@
 **Issue:** cristim/AztecCraft#165
 
 The + and - keys and `set_manipulator_size` set one global size from 0.1 to 10 for the Move,
-Rotate and Scale manipulators (Maya's Global scale). No parity with Maya is claimed. The Maya docs
-state the range but not the default, the step, key repeat or persistence, so these are PROVISIONAL:
-default 1.0, keys step on the 1.25^k grid (integer k from -10 to 10, 0.107 to 9.313 when shown, so round
-trips are exact), key repeat steps again, and the size is session-only (no preferences store; it
-never dirties the scene or enters history). The MCP tool accepts any value from 0.1 to 10, rounded to three decimals; a later key step moves to the next grid value in its direction that changes the three-decimal value. A key step stores the raw grid value, so an exact tie such as 1.5625 rounds to 1.563 for stepping but is stored as 1.5625.
+Rotate and Scale manipulators (Maya's Global scale). No parity with Maya is claimed. The default,
+key step grid, key repeat and drawn length (rows 15 to 19) and their evidence are in the [policy constants table](.project-docs/development.md#application-policy-constants).
+The size is session-only (no preferences store; it never dirties the scene or enters history). The MCP tool accepts any value from 0.1 to 10, rounded to three decimals; a later key step moves to the next grid value in its direction that changes the three-decimal value. A key step stores the raw grid value, so an exact tie such as 1.5625 rounds to 1.563 for stepping but is stored as 1.5625.
 
-- The drawn length is `max(72 * size, 36)` px before the view foreshortening, so below size 0.5 the
+- The drawn length has a floor before the view foreshortening, so at small sizes the
   manipulator stops shrinking on screen. A foreshortened axis (#155) can still become hard to pick.
-- The arrowhead, boxes, centre zones and pick radius stay fixed in pixels.
+- The arrowhead, boxes, centre zones and pick radius (8 px, Maya Pick Range) stay fixed in pixels.
+- Since the pick radius became 8 px (#295), a click within 8 px of a manipulator handle grabs it
+  instead of selecting the object behind. A disabled handle (the free-rotate circle, the view ring or a
+  Scale plane) consumes the click with an unsupported status only when no enabled handle also lies
+  within the radius; an enabled handle wins the overlap
+  (`scale_planes_are_not_axis_hits_from_the_front_and_the_oblique_result_is_pinned`).
+- An end-on Scale axis keeps its 5 px tip box next to the origin (about 1.4 px away in the test
+  camera), so it wins pixels just outside the 7 px centre box, out to about 16 px from the origin at
+  the 8 px radius. This pre-existing defect is tracked in #297.
 - At very large sizes with a wide field of view, ring segments behind the camera are dropped rather
   than near-clipped, and the hemisphere cull is approximate.
 - Unsupported: the Preferences Manipulators page, Handle size and Line size (`manipOptions
@@ -74,7 +80,7 @@ The exact Maya version/platform and reference installation have not been establi
 
 The original first-push restriction required 80–90% of all Maya 2026 functionality, including simulation, rendering, scripting, and plugin compatibility. The user's later explicit push/merge instruction authorizes early prototype publication, superseding that restriction. The full-functionality target remains unmet, and the complete inventory must still be enumerated and verified against a reference. Don't calculate a percentage from an arbitrary feature list.
 
-[The initial inventory seed](.project-docs/inventory-seed.md) provides source-backed candidate workflows, but its 100 entries aren't a complete denominator. Component versions, cloud services, collection components and third-party plug-in scope still need to be pinned. Overall coverage remains unmeasured.
+The [parity inventory framework](.project-docs/parity-inventory/README.md) (status vocabulary, evidence record, PROPOSED documentation-conformance measurement rule and 14 unexpanded family files) is in progress; the slices are tracked in #6 and no family has rows yet. [The initial inventory seed](.project-docs/inventory-seed.md) provides source-backed candidate workflows, but its 100 entries aren't a complete denominator. Component versions, cloud services, collection components and third-party plug-in scope still need to be pinned. Overall coverage remains unmeasured.
 
 ## Desktop and platform verification pending
 
@@ -104,18 +110,17 @@ verification must distinguish this observation from a confirmed diagnosis.
 **Severity:** medium
 **Area:** history, documents and viewport
 
-Undo keeps the newest 50 NativeScene snapshots and silently drops older ones
-(Maya's documented default Finite queue size, Preferences > Undo; the limit is
-fixed, not configurable, pending #178; Maya 2017 Help is the newest page found
-stating the default, so 2026/2027 are unconfirmed: PROVISIONAL). Redo is
+Undo keeps the newest 50 NativeScene snapshots and silently drops older ones. The 50 matches
+the Maya 2027 Undo preferences default; the fixed size (no Infinite choice) does not, and
+the evidence is in the [policy constants table](.project-docs/development.md#application-policy-constants) (row 21; configurable limit pending #178). Redo is
 unchanged. The dirty state compares the live scene with the saved scene by value,
 so dropping old entries cannot make an edited scene read clean. Memory still
 scales with scene size times 50. Autosave and persisting history remain pending.
 
 Selection, camera, tool and panel changes do not create undo entries in
 AztecCraft (`.project-docs/mcp.md` already says selection does not). Whether Maya
-puts selection changes on its undo queue is unverified and deferred to #33
-(reconcile provisional application policies with Maya defaults).
+puts selection changes on its undo queue is not stated by its Undo preferences page; see
+row 22 of the [policy constants table](.project-docs/development.md#application-policy-constants).
 
 Measurement: on macOS (Darwin 25.1, arm64 release build),
 `cargo test --release --test history_memory -- --ignored --nocapture` with 1000
@@ -192,12 +197,11 @@ made the whole view refuse. Polygons with extreme coordinates (about |c| >= 1e15
 **Area:** component input and viewport
 
 Face mode supports one exact canonical face target, visible depth-tested center
-markers and plain primary-click replacement/clearing. The fixed 4x4 marker,
-8x8 click box, corner-mean center, center-ray visibility and 1,000,000-intersection
-budget are application policies, not verified Maya defaults. Nonplanar faces can
-hide their own centers. Center visibility uses a 1e-4 relative linear
-view-depth tolerance, so occluders within about 1e-4 of the center's view depth
-(z-fighting range, e.g. stacked planes 1e-3 apart at distance 50) do not hide it;
+markers and plain primary-click replacement/clearing. The marker, click box, center
+definition, center-ray visibility, depth tolerance and work cap are application policies,
+not verified Maya defaults (rows 1 to 5, 12 and 13 of the [policy constants table](.project-docs/development.md#application-policy-constants)). Nonplanar faces can
+hide their own centers. Occluders within the face-center depth tolerance of the center's
+view depth (z-fighting range, e.g. stacked planes 1e-3 apart at distance 50) do not hide it;
 unobstructed finite degenerate centers can be selected.
 Other component masks, multiple-face gestures, marquee, hover and marking menus
 are unsupported. The same holds in Vertex and Edge modes: a Shift or Ctrl click is refused
@@ -226,13 +230,11 @@ UNCONFIRMED, so this is provisional. A click on empty space clears the active ty
 pick, also UNCONFIRMED for Maya.
 The Channel Box shows only the parent object's channels in Vertex, Edge and Face modes; there is
 no component feedback (coordinates or attributes) for the picked vertex or edge.
-The 10 px vertex click box, the 6 px edge click distance, the 5 px vertex marker, the
-3 px selected-edge strip and the depth tolerance below are original provisional values,
-not verified Maya defaults; Maya's click tolerance and preselection defaults are
-UNCONFIRMED for 2026. Colours follow only the Maya 2026 colour words (purple-ish
+The vertex click box, edge click distance, vertex marker, selected-edge strip, candidate
+ranking and depth tolerance are original provisional values listed in the [policy constants table](.project-docs/development.md#application-policy-constants)
+(rows 6 to 11), not verified Maya defaults. Colours follow only the Maya 2026 colour words (purple-ish
 vertex, highlighted when selected, light-blue edge, light-orange selected edge) with
-original RGB values. Candidates are ranked by pointer distance, then depth, then
-source order, which is also an application policy. In Vertex and Edge modes component
+original RGB values. In Vertex and Edge modes component
 feedback replaces Object feedback, so the selected object's faces are not tinted and
 selected curves are not highlighted.
 
@@ -248,9 +250,9 @@ view axis from the eye: marker bias moves a point toward the eye by that fractio
 eye distance, and occlusion treats a hit as blocking only when its linear view depth is
 below `depth * (1 - 6e-3)`. It is neither normalized device depth nor world units. Marker
 bias, selected-edge strip bias, Wireframe marker filtering and pick occlusion share it, so
-draw and pick agree; the face centre keeps 1e-4. Readbacks (Apple M1 Pro, Metal, side-2
+draw and pick agree; the face centre keeps its own tolerance (table row 5). Readbacks (Apple M1 Pro, Metal, side-2
 cube at the origin, near 0.01, far 10000, yaw 0.6, pitch 0.4, 1024 px square, 45 degree
-fov): every corner with a front-facing face showed all 25 marker pixels and no hidden
+fov; the committed ignored default-camera readbacks were re-run on the same adapter at the default near 0.1 and the film-fit lens and pass): every corner with a front-facing face showed all 25 marker pixels and no hidden
 corner drew at the default distance 8 and at 120 for tolerances 6e-3 through 8e-3; 5e-3
 left one silhouette corner at 20/25, and 2e-2 let a hidden corner show at 120, so the
 margin is thin. The 5e-3 and 2e-2 bracket comes from manual readbacks with the constant
@@ -260,16 +262,61 @@ software Vulkan job runs the GPU tests, but it was not used to choose or bracket
 value; other adapters were not run. Limits: the tolerance is relative to distance, so
 plates thinner than about 0.05 units at the default distance 8 (6e-3 times 8) can show,
 or let a click pick, the vertex behind them; objects only a few px across can have a
-hidden corner picked; and at distances beyond about 500 a flat 6e-3 under-covers the
-Depth32Float resolution (no readback needed more at d=120 or d=300 with small-object
-runs, but the buffer's relative resolution grows with distance). A pixel-derived bias is
+hidden corner picked; and at large distances a flat 6e-3 under-covers the Depth32Float
+resolution (no readback needed more at d=120 or d=300 with small-object runs, but the
+buffer's relative resolution grows with distance). The relative depth step is about
+5.96e-8 * z / near, which reaches 6e-3 near z = 1007 at near 0.01 and near z = 10067 at
+near 0.1, so the default near of 0.1 moves that limit beyond the default far plane. A pixel-derived bias is
 the planned follow-up (#135).
+The default near clip is 0.1 (Create Camera Options default; the persp camera's own is
+undocumented, PROVISIONAL). Dolly has no minimum distance, so a distance below the near
+clip puts the target closer to the eye than the near plane (between the eye and the plane) and clips it; whether Maya has a hard dolly
+stop is PROVISIONAL (no Dolly Tool page cited). A biased vertex marker (0.6% toward the
+eye) can be near-clipped while its surface vertex at eye depth in [0.1, 0.1006) stays
+visible; negligible and pre-existing.
+Frame All and Frame Selected floor the distance at twice the near clip plus 5% (0.21 at the
+default near), so an object with a radius under 2·near·sin(limiting half angle), about 0.065 at aspect up to 1.5 and less in wider viewports, frames smaller than the screen
+fraction other objects get. There is no per-camera near clip control (Maya exposes Near Clip
+Plane on the camera); a Camera Attributes near-clip setting is the candidate, not built.
+The default lens is film-fit (development.md row 25). Only the Fill film fit is built;
+Horizontal, Vertical and Overscan fits, film offset, camera scale and lens squeeze are
+unsupported, and the focal length and aperture cannot be changed. The Fill threshold, the Fill
+default and treating the viewport aspect as the resolution gate are PROVISIONAL. Pan moves
+`pixels * distance * 0.002` world units whatever the field of view, so on screen it runs about
+1.21x (aspect <= 1.5) to 1.43x (16:9) faster than under the old 45 degrees; it is not
+cursor-locked (pre-existing). MCP-only sessions that never painted frame at viewport aspect 1.0
+(a placeholder), so Frame All there is framed for a square viewport; `fov_y_degrees` then
+reports the 1.0-aspect value. Readbacks calibrated at 45 degrees (the marker bracket above) were
+not repeated at the film-fit lens beyond the committed default-camera ones.
 
 Wireframe hides occluded vertex markers like face centres, but draws the selected edge
 and every edge through surfaces. When that check is over budget `vertex_markers_hidden`
 (Vertex mode) or `face_centres_hidden` (Face mode) is true. The renderer draws every
 `ViewInstance` edge; the bin crate has no loose-edge fixture, so the face-less case is
 covered by the carried edge list and the picker tests, not pixels.
+
+## Open filter, unsaved-changes prompt and read-only marking follow Maya 2025.1 (PROVISIONAL); Recent Files is missing (#189)
+
+**Severity:** low
+**Area:** native document lifecycle
+**Issue:** cristim/AztecCraft#189
+
+The Open dialog's first (default) filter is "Maya Scenes" for `*.ma` and `*.mb`, as Maya 2025.1's
+`fileDialogFilterTypes.mel` puts "Maya Scenes (*.ma *.mb *.mlt)" first; AztecCraft reads no `.mlt`,
+and the per-format filters keep their existing labels, which say how much of each format is
+read. The unsaved-changes prompt uses Maya 2025.1's `saveChanges.mel` wording: "Save Changes" and
+"Save changes to <path>?" for a scene with a path (Maya formats the full scene name), "Warning:
+Scene Not Saved" and "Save changes to untitled scene?" otherwise, with Save, Don't Save and
+Cancel. The MCP decision for Don't Save is still `discard`. AztecCraft keeps its own extra lines
+for uncertain writes and changed Open sources. The default filter applies where the platform dialog has a filter list: Windows and GTK select
+the first filter, the Linux XDG portal leaves the default to its backend (PROVISIONAL), and the
+macOS panel merges every filter into its allowed types with no filter choice. In the prompt, Save
+is disabled with a reason unless the scene is an opened Maya Binary on macOS or Linux (or a write
+is being reconciled); Maya's Save would run Save As for an untitled scene (#156, #15). A read-only
+(Maya ASCII) scene shows " (read-only)" in the window title and its reason at the top of the File
+menu, both AztecCraft additions with no Maya counterpart. File > Recent Files is not implemented
+yet: it needs persisted preferences and an MCP read path. Maya 2026 and the 2027.2 documentation
+pin are unverified.
 
 ## Selection changes are refused under a file modal
 
@@ -348,7 +395,7 @@ The revised hidden logic path and retained-input guard pass actual trait-callbac
 **Severity:** medium
 **Area:** native document lifecycle
 
-Cmd-Q, the AztecCraft > Quit menu item, Dock Quit, Quit All from the Apple menu, logout and shutdown all send `terminate:`. `crates/macos-quit-menu` adds an `applicationShouldTerminate:` method to winit's application delegate at startup (additive `class_addMethod`; the launch aborts with a printed error if the selector already exists or the delegate shape changed; winit is pinned to 0.30.13 and `tests/winit_pin.rs` fails if the lock moves). The hook replies "terminate later", asks the app to close the front window through the shared close guard (#11), and answers AppKit with the user's choice, so each of those paths is designed to show the Save/Discard/Cancel prompt (native coverage is listed below). The earlier `performClose:` retarget of the Quit item is retired. With no key window the hook picks the window itself, which should stop the Cmd-Q beep (native check pending).
+Cmd-Q, the AztecCraft > Quit menu item, Dock Quit, Quit All from the Apple menu, logout and shutdown all send `terminate:`. `crates/macos-quit-menu` adds an `applicationShouldTerminate:` method to winit's application delegate at startup (additive `class_addMethod`; the launch aborts with a printed error if the selector already exists or the delegate shape changed; winit is pinned to 0.30.13 and `tests/winit_pin.rs` fails if the lock moves). The hook replies "terminate later", asks the app to close the front window through the shared close guard (#11), and answers AppKit with the user's choice, so each of those paths is designed to show the Save/Don't Save/Cancel prompt (native coverage is listed below). The earlier `performClose:` retarget of the Quit item is retired. With no key window the hook picks the window itself, which should stop the Cmd-Q beep (native check pending).
 
 Fallbacks, all deliberate:
 - If a terminate is owed and `request_close` is refused for good (an invalid text draft or an active manipulation), the app declines the terminate: a logout or shutdown is aborted instead of hanging, and the user fixes the draft and quits again.
@@ -573,12 +620,12 @@ Untouched channels are preserved bit for bit. Inspection echoes the requested va
 The Rotate ring angle comes from a ray-plane hit. Just above the edge-on limit
 (|ray . ring normal| of 1e-3, about 0.06 degrees from the plane) the hit is
 far away and the angle can swing sharply per pixel; below it the drag is refused as
-Degenerate. The limit, the 72 px handle size, the 1 px Scale pivot refusal and the
-100 px uniform-scale reference are provisional, not taken from Maya, were not changed
+Degenerate. The limit and the other handle geometry values (rows 15, 16 and 20 of the [policy constants table](.project-docs/development.md#application-policy-constants))
+are provisional, not taken from Maya, were not changed
 by the UI wiring and use physical pixels (they ignore HiDPI scaling). Maya 2026 back-half
 ring behaviour is unverified.
 
-Move arrows and Scale shafts and boxes draw at 72 px times the sine of the angle between
+Move arrows and Scale shafts and boxes draw at their full length times the sine of the angle between
 the axis and the view ray, so an end-on axis is short and picks exactly where it is drawn
 (#155). Plain perspective foreshortening was chosen because a search of the Maya 2026
 manipulator help found no documented minimum length, fading or hiding of end-on axes; the
@@ -586,7 +633,7 @@ rule is unverified against Maya itself. It is a first-order approximation: exact
 Off-centre it draws short. For a pinhole camera, a small displacement perpendicular to a view ray `a` off
 the camera axis, at distance D, shows on screen scaled by 1/(D cos a) out of the ray/axis
 plane and 1/(D cos^2 a) in it (checked with a finite-difference projection), against 1/D
-for the same displacement at the same distance on-axis. The constant 72 px times the sine
+for the same displacement at the same distance on-axis. The constant full length (table row 15) times the sine
 is therefore short by between 1 - cos(a) and 1 - cos^2(a), depending on the axis
 direction: 29-50% at the edge midpoints and 42-67% in the corners of a square viewport at
 a 90 degree field of view, approaching 100% as a nears 90 degrees. The finite length of the
@@ -637,11 +684,12 @@ the polyPlane node page lists sw/sh 10 (the command page lists sw 10 and sx/sy 5
 Maya 2025.1 creates 10x10 through both `polyPlane` and Create > Polygon Primitives > Plane.
 Only counts were compared; Maya 2026 is unverified.
 
-## The grid uses Maya's default options (#160)
+## The grid uses Maya 2025.1's queried size and spacing (#160)
 
 Maya 2025.1 `grid -q` in `mayapy` standalone reports size 12, major
 lines every 5 units and 5 divisions, matching the Grid Options defaults in the 2024 help;
-the 2027 grid command page instead lists 10 and 10 for spacing and divisions. The viewport
+the 2027 grid command page instead lists 10 and 10 for spacing and divisions (row 28 of the
+[policy constants table](.project-docs/development.md#application-policy-constants)). The viewport
 draws a line every unit out to +/-12 with major lines at multiples of 5. Reading size as the
 half-length is PROVISIONAL, as are the greys: `displayRGBColor` returns nothing headless, so
 Maya's grid colours are unverified (its axes may be darker, not brighter, than the lines; the
@@ -778,8 +826,7 @@ New, which does not apply to history steps.
 
 ## Default View pose and view history are unverified
 
-The Default View row and Alt+Home restore AztecCraft's own default camera (target 0, yaw 0.6 rad,
-pitch 0.4 rad, distance 8). Maya documents no default perspective pose, so the pose is not
+The Default View row and Alt+Home restore AztecCraft's own default camera (row 24 of the [policy constants table](.project-docs/development.md#application-policy-constants)). Maya documents no default perspective pose, so the pose is not
 compared with Maya: PROVISIONAL. Default View restores only the pose (target, distance, yaw,
 pitch); the far clip plane, which framing can grow, is not reset. Fn+Option+Left as Alt+Home on compact Mac keyboards is unchecked.
 Maya's Undo/Redo View Change, the `[` and `]` view history and View > Bookmarks are not
@@ -789,3 +836,38 @@ Set Camera Pose and `set_camera_pose` judge Changed/Unchanged numerically, so -0
 pitch) replies Unchanged while the stored sign bits flip; the view renders identically and inspect may show
 -0. Move-handle drag capture compares bits (`same_capture`), so the flip can only cancel a live drag
 conservatively, and the human-input guard keeps remote camera operations out of a held drag.
+
+## Manipulator highlight stays painted while the hover status is suppressed
+
+**Severity:** low
+**Area:** viewport manipulators, MCP inspection
+**Issue:** cristim/AztecCraft#306
+
+The Rotate and Scale hover status text is gated by the hover admission (no modal, not closing, window
+focused, pointer inside, no egui popup, renderer healthy), but the handle highlight is painted from the
+raw pointer every frame. With the window unfocused, a popup open or a file modal up, the handle under
+the cursor stays highlighted while the status reverts to the tool help. `inspect_scene`
+`pointer_hit`, `pointer_disabled` and `pointer_refusal` follow the highlight, so they keep reporting
+the pick in those states (pinned by `inspection_reports_the_pick_while_native_hover_status_is_suppressed`).
+They are null in other states too (for example, `viewport` is null when the window is hidden or
+minimized, in component selection modes and after a renderer terminal error; it is also null with no
+valid capture, after a scene load and after a camera change, the last two until the next viewport
+capture; the pointer fields are null when the pointer has left the window, a manipulation is active
+or Select is the tool). `pointer_refusal` includes the refusals raised when a Rotate or Scale drag
+begins, for example an edge-on Rotate ring or a Scale grab whose along-axis component is under 1 px
+of world length (a ring plane behind the camera along the press ray is expected from
+`HandleError::BehindRay` but not yet reproduced), as the press shows them; native hover shows the same text. Not fixed: gating the highlight
+changes native behaviour and needs its own issue; the admission is an inline expression that needs the egui context for the popup check.
+
+## Inspection keeps reporting a pick after a view build error
+
+**Severity:** low
+**Area:** viewport manipulators, MCP inspection
+**Issue:** tracked in #310
+
+After a view build error (for example ancestors whose scales overflow), `move_viewport` survives, so
+`inspect_scene` pointer fields still report a pick from the surviving capture although the viewport
+paints nothing. This contradicts the "mirrors the painted highlight" wording in
+`.project-docs/mcp.md` (the pointer fields paragraph). The tests
+`a_scene_frame_refusal_is_reported_for_the_whole_tool_at_any_pixel` and
+`sdk_pointer_refusal_reports_a_scene_frame_refusal` rely on the surviving capture.

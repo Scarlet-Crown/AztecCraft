@@ -46,10 +46,10 @@ fn front_axes_share_exact_physical_drawing_and_hit_geometry() {
         Some(WorldAxis::Y)
     );
     assert_eq!(
-        handles.hit_test(DVec2::new(436.0, 306.0)),
+        handles.hit_test(DVec2::new(436.0, 308.0)),
         Some(WorldAxis::X)
     );
-    assert_eq!(handles.hit_test(DVec2::new(436.0, 306.001)), None);
+    assert_eq!(handles.hit_test(DVec2::new(436.0, 308.001)), None);
     assert_eq!(handles.hit_test(DVec2::new(410.0, 300.0)), None);
     assert_eq!(
         handles.hit_test(DVec2::new(410.001, 300.0)),
@@ -740,7 +740,8 @@ fn move_axes_are_pickable_outside_the_centre_at_every_size() {
 }
 
 #[test]
-fn the_move_pick_radius_stays_six_pixels_at_every_size() {
+fn the_move_pick_radius_stays_eight_pixels_at_every_size() {
+    assert_eq!(HIT_RADIUS, 8.0);
     let camera = front_camera();
     for size in [0.1, 10.0] {
         let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
@@ -759,6 +760,66 @@ fn the_move_pick_radius_stays_six_pixels_at_every_size() {
             "outside at {size}"
         );
     }
+}
+
+#[test]
+fn move_picks_at_seven_and_eight_pixels_and_misses_past_eight_at_every_size() {
+    // 7.0, 7.9 and 8.0 fail at the old 6 px radius; 8.1 and 9.0 pass there (not red).
+    let camera = front_camera();
+    for size in [0.1, 10.0] {
+        let handles = WorldHandles::new(&sized(&camera, size), DVec3::ZERO).unwrap();
+        let shaft = shaft_of(&handles, 0);
+        // The front X shaft is horizontal, so the offsets below are exact.
+        let on_shaft = shaft.start + (shaft.end - shaft.start) * 0.35;
+        for (offset, expected) in [
+            (7.0, Some(WorldAxis::X)),
+            (7.9, Some(WorldAxis::X)),
+            (8.0, Some(WorldAxis::X)),
+            (8.1, None),
+            (9.0, None),
+        ] {
+            for sign in [1.0, -1.0] {
+                assert_eq!(
+                    handles.hit_test(on_shaft + DVec2::new(0.0, sign * offset)),
+                    expected,
+                    "{offset} at {size}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn oblique_shaft_bands_overlap_and_the_nearer_axis_wins() {
+    // On the X/Y bisector just outside the centre exclusion both shafts are within 8 px; the
+    // nearer one wins and an exact tie goes to X (see the XYZ-order test).
+    // Yaw 0.2, pitch 0.5 puts X and Y about 95 degrees apart, so the band reaches 10.8 px.
+    let camera = Camera::new(Vec3::ZERO, 0.2, 0.5, 10.0, 90_f32.to_radians(), 0.1, 100.0).unwrap();
+    let handles = WorldHandles::new(&capture(&camera, 1.0), DVec3::ZERO).unwrap();
+    let origin = handles.origin;
+    let (x, y) = (shaft_of(&handles, 0), shaft_of(&handles, 1));
+    let direction = |shaft: ScreenSegment| (shaft.end - shaft.start).normalize();
+    let bisector = (direction(x) + direction(y)).normalize();
+    let distance = |axis: usize, pixel: DVec2| {
+        handles.axes()[axis]
+            .arrow()
+            .unwrap()
+            .segments()
+            .map(|segment| segment_distance_squared(*segment, pixel).sqrt())
+            .fold(f64::INFINITY, f64::min)
+    };
+    let found = (0..40).find_map(|step| {
+        let pixel = origin + bisector * (10.05 + f64::from(step) * 0.05);
+        let both = distance(0, pixel) <= HIT_RADIUS && distance(1, pixel) <= HIT_RADIUS;
+        (both && distance(2, pixel) > HIT_RADIUS).then_some(pixel)
+    });
+    let pixel = found.expect("a pixel in the X/Y overlap band outside the centre exclusion");
+    let expected = if distance(0, pixel) <= distance(1, pixel) {
+        WorldAxis::X
+    } else {
+        WorldAxis::Y
+    };
+    assert_eq!(handles.hit_test(pixel), Some(expected));
 }
 
 #[test]
@@ -817,4 +878,58 @@ fn the_move_centre_exclusion_stays_fixed_at_every_size() {
             );
         }
     }
+}
+
+#[test]
+fn arrowhead_dimensions_are_pinned_to_their_provisional_pixel_values() {
+    assert_eq!(ARROWHEAD_LENGTH, 12.0);
+    assert_eq!(ARROWHEAD_HALF_WIDTH, 4.0);
+}
+
+// InvalidProjection is shared by several guards, so each test also names what a mutant without the
+// guard would return instead. Not tested because no input reaches them: the non-finite-origin check in
+// `project_origin` (the clip check right after returns the same variant, and `HandleFrame::new`
+// already rejects such origins), the non-finite `fraction` in `projected_fraction` (the `max(0.0)`
+// maps NaN and -inf to zero), and the non-finite radius in `RotateHandles::new` (a successful
+// `project_origin` bounds depth and lateral offset by the finite clip planes).
+
+#[test]
+fn project_origin_reports_an_overflowing_clip_as_invalid_not_clipped() {
+    // A 60 degree field of view scales x by about 1.3, so a lone f64::MAX x overflows the clip (at
+    // 90 degrees the scale is 0.75 and it would not).
+    let camera = Camera::new(Vec3::ZERO, 0.0, 0.0, 10.0, 60_f32.to_radians(), 0.1, 100.0).unwrap();
+    let capture = capture(&camera, 1.0);
+    // Finite origin, non-finite clip: without the guard NaN pixels would read as OriginClipped.
+    assert_eq!(
+        capture.project_origin(DVec3::new(f64::MAX, 0.0, 0.0)).err(),
+        Some(HandleError::InvalidProjection)
+    );
+    assert_eq!(
+        capture.project_origin(DVec3::new(1e6, 0.0, 0.0)).err(),
+        Some(HandleError::OriginClipped)
+    );
+}
+
+#[test]
+fn projected_fraction_refuses_an_origin_at_the_eye_instead_of_reporting_zero() {
+    let capture = capture(&front_camera(), 1.0);
+    // Without the guard the zero distance gives a NaN cosine, which `max(0.0)` turns into Ok(0.0).
+    assert_eq!(
+        capture.projected_fraction(capture.eye(), DVec3::X).err(),
+        Some(HandleError::InvalidProjection)
+    );
+    assert!(capture.projected_fraction(DVec3::ZERO, DVec3::X).is_ok());
+}
+
+#[test]
+fn screen_direction_refuses_an_overflowing_clip_depth_instead_of_a_degenerate_axis() {
+    let capture = capture(&front_camera(), 1.0);
+    // w * w overflows; without the guard the derivative is zero (a finite numerator over an infinite
+    // denominator) and ProjectedAxisDegenerate results.
+    assert_eq!(
+        capture
+            .screen_direction(DVec4::new(0.0, 0.0, 0.0, 1e200), DVec3::X)
+            .err(),
+        Some(HandleError::InvalidProjection)
+    );
 }

@@ -10,8 +10,8 @@
         6.081475257873535
       ],
       "far_clip": 10000.0,
-      "fov_y_degrees": 45.00000125223908,
-      "near_clip": 0.009999999776482582,
+      "fov_y_degrees": 37.849961153583806,
+      "near_clip": 0.10000000149011612,
       "pitch_degrees": 22.918312146742387,
       "target": [
         0.0,
@@ -108,7 +108,9 @@
           }
         ],
         "pointer_available": false,
+        "pointer_disabled": null,
         "pointer_hit": null,
+        "pointer_refusal": null,
         "provenance": "last_native_viewport_capture"
       }
     },

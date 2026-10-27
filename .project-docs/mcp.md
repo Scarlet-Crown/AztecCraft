@@ -55,11 +55,11 @@ Call `inspect_scene` first. Every other tool requires `scene_token`, a UUID stri
 
 | Tool | Arguments besides `scene_token` | Result |
 | --- | --- | --- |
-| `inspect_scene` | No arguments; no token required | Committed mesh/curve metadata including the active manipulation preview, typed document origin, retained-source counts/read-only reason, units, instance paths, selected identity, history, pending action, dirty/draft/focus/modal/closing flags, the native `status_message` (nullable, at most 512 characters, a fixed notice for file-error text that can carry a local path) and the camera pose: `target` and `eye` in scene world units, `distance`, `yaw_degrees` (about world Y, normally in [0, 360]; 0 puts the eye on +Z and 90 on +X), `pitch_degrees` (elevation, positive above the target, strictly between -90 and 90), `fov_y_degrees` (vertical perspective field of view) and `near_clip`/`far_clip`. `eye` = `target` + `distance` × (sin yaw · cos pitch, sin pitch, cos yaw · cos pitch). Read-only: no tool sets an absolute pose. The defaults are a 45 degree vertical field of view and a 0.01 to 10000 clip range; framing a large object can raise `far_clip`. They have not been compared with Maya's persp camera, whose Angle of View is horizontal |
+| `inspect_scene` | No arguments; no token required | Committed mesh/curve metadata including the active manipulation preview, typed document origin, retained-source counts/read-only reason, units, instance paths, selected identity, history, pending action, dirty/draft/focus/modal/closing flags, the native `status_message` (nullable, at most 512 characters, a fixed notice for file-error text that can carry a local path) and the camera pose: `target` and `eye` in scene world units, `distance`, `yaw_degrees` (about world Y, normally in [0, 360]; 0 puts the eye on +Z and 90 on +X), `pitch_degrees` (elevation, positive above the target, strictly between -90 and 90), `fov_y_degrees` (the effective vertical perspective field of view at the current viewport aspect, the last painted one and 1.0 before the first paint) and `near_clip`/`far_clip`. `eye` = `target` + `distance` × (sin yaw · cos pitch, sin pitch, cos yaw · cos pitch). `set_camera_pose` sets an absolute pose; the field of view and clip planes are not settable. The default lens is the film-fit one of row 25 (focal length 35 mm, Horizontal Film Aperture 1.4173 in, Vertical Film Aperture 0.9449 in, Fill: vertical 37.85 degrees at aspect up to about 1.49995 (1.4173 / 0.9449), narrower above) and the clip range is 0.1 to 10000; framing a large object can raise `far_clip`. The clip range matches the Create Camera Options defaults, but Maya's persp camera defaults are undocumented (PROVISIONAL), and the field of view has not been compared with Maya's persp camera, whose Angle of View is horizontal |
 | `set_active_tool` | `tool`: `select`, `move`, `rotate` or `scale` | Activate a supported native tool through shared guards |
 | `set_tool_space` | `tool`: `rotate` or `scale`; `space`: `object` or `world` | Set that tool's Axis Orientation (`Operation::SetToolSpace`, the operation the native Tool Settings selector dispatches). Refused with `busy_manipulation` during any manipulation and `busy_editing` during a draft, modal or close; `inspect_scene` `manipulation.rotate_space` and `scale_space` report the current values |
 | `set_tool_handle` | `tool`: `rotate` with `axis` (`x`, `y`, `z`) or `scale` with `handle` (`x`, `y`, `z`, `uniform`) | Set the persistent Rotate axis or Scale handle behind the native Tool Settings selectors (`Operation::SetToolHandle`), which only feed numeric entry. `begin_manipulation` always names its own axis or handle and does not read it. Same guards as `set_tool_space`; `inspect_scene` `manipulation.rotate_axis` and `scale_handle` report the current values. Closest Maya analogue: `manipRotateContext` and `manipScaleContext` `-currentActiveHandle` scripting flags (not a Tool Settings control); parity none |
-| `set_manipulator_size` | `size`: 0.1 to 10.0 | Set the global size of the Move, Rotate and Scale manipulators (`Operation::SetManipulatorSize`), the same setting as the native + and - keys. The value is rounded to three decimals (`2.5555` reads back as `2.556`); the keys step on the 1.25^k grid (k from -10 to 10, about 0.107 to 9.313) and a step from an off-grid value moves to the next grid value in that direction that changes the three-decimal value. Out-of-range or non-finite values are `invalid_params`. Session-only: it does not dirty the scene or enter history. Same guards as `set_tool_handle`; `inspect_scene` `manipulation.manipulator_size` reports it. PROVISIONAL: the Maya docs state the 0.10 to 10.00 range (Manipulators preferences, Global scale) but not the default, step or persistence; parity not claimed |
+| `set_manipulator_size` | `size`: 0.1 to 10.0 | Set the global size of the Move, Rotate and Scale manipulators (`Operation::SetManipulatorSize`), the same setting as the native + and - keys. The value is rounded to three decimals (`2.5555` reads back as `2.556`); the keys step on the 1.25^k grid (k from -10 to 10, about 0.107 to 9.313) and a step from an off-grid value moves to the next grid value in that direction that changes the three-decimal value. Out-of-range or non-finite values are `invalid_params`. Session-only: it does not dirty the scene or enter history. Same guards as `set_tool_handle`; `inspect_scene` `manipulation.manipulator_size` reports it. PROVISIONAL: the Maya docs state the 0.10 to 10.00 range (Manipulators preferences, Global scale) but not the default, step or persistence (see rows 17 to 19 of the [policy constants table](development.md#application-policy-constants)); parity not claimed |
 | `begin_manipulation` | `oneOf` by `kind`, each branch closed. `move`: `node_id`, full `instance_path` (1 to 256 decimal IDs), `axis` (`x`, `y` or `z`, World). `rotate`: the same plus `axis` and `space` (`object` or `world`). `scale`: the same plus `handle` (`x`, `y`, `z` or `uniform`) and `space` | Begin a remote-owned Move, Rotate or Scale of the exact selected transform; returns `manipulation_id`. A field of another kind (`handle` on a rotate, `space` on a move) is a protocol error |
 | `update_manipulation` | `manipulation_id`: decimal string; exactly one of `distance`, `angle` or `factor` (`oneOf`, closed branches) | Preview an absolute value from begin. `distance` (Move) is in the scene linear unit, `angle` (Rotate) in the scene angular unit (degrees or radians), `factor` (Scale) is unitless and greater than zero. A factor of zero or less is rejected at the schema/parser layer as `invalid_params` (the schema declares `exclusiveMinimum: 0`), so the core's zero-scale refusal is reachable only from a native drag. A parameter that does not match the active kind returns `manipulation_kind_mismatch` and leaves the preview unchanged |
 | `finish_manipulation` | `manipulation_id`; `finish`: `commit` or `cancel` | One Undo at commit (labelled Move, Rotate or Scale), or exact begin-state restoration |
@@ -89,7 +89,7 @@ Call `inspect_scene` first. Every other tool requires `scene_token`, a UUID stri
 | `orbit_camera` | `radians`: two finite numbers, yaw and pitch deltas | Changed or unchanged camera; pitch clamps near the poles |
 | `pan_camera` | `world_units`: two finite numbers, camera right and up displacement in scene world units | Changed or unchanged camera target and eye |
 | `dolly_camera` | `factor`: positive finite distance multiplier | Changed or unchanged camera distance; below one moves closer |
-| `set_camera_pose` | `target`: three finite numbers; `distance`: positive; `yaw_degrees`, `pitch_degrees`: the values `inspect_scene` reports | Changed or unchanged camera; yaw wraps, pitch beyond the orbit limit is rejected, lens and clip planes untouched |
+| `set_camera_pose` | `target`: three finite numbers; `distance`: positive; `yaw_degrees`, `pitch_degrees`: the values `inspect_scene` reports | Changed or unchanged camera; yaw wraps, pitch beyond the orbit limit is rejected, lens and clip planes untouched; a distance below near_clip puts the target closer to the eye than the near plane (between the eye and the plane), so it is clipped and not pickable |
 | `new_scene` | None | New empty document immediately, or a pending confirmation when dirty |
 | `open_scene` | `path`: 1 to 4096 UTF-8 bytes, no NUL | Supported `.mb`, read-only static cubic `.ma`, or legacy `.aztec` candidate; applies immediately or stages an immutable candidate for confirmation |
 | `save_scene` | None | Active Unix Maya binary Save, an authored untitled scene saved to a `.ma` path, or reconciliation of an uncertain installation without another write |
@@ -144,8 +144,9 @@ retains the current mask. This transient state does not edit the native scene,
 file binding, history or dirty status. Native actions retain the existing valid
 human-draft commitment policy; remote requests refuse any draft, valid or not (`src/mcp_tests/official_client/attribute_editor.rs "Human draft: any draft is busy_editing, valid or not."`).
 
-Native Face selection uses 4x4 physical-pixel center markers and an 8x8 click box,
-with center-ray visibility and a bounded intersection budget. Plain primary
+Native Face selection uses center markers and a click box, with center-ray
+visibility and a bounded intersection budget (sizes and cap: rows 1, 2 and 4 of the
+[policy constants table](development.md#application-policy-constants)). Plain primary
 click replaces or clears the face; modified selection and ambiguous coalesced
 primary releases are unsupported. Alt camera navigation remains available.
 F11 and Select > Components > Face enter Face mode; F8 goes from Object or Hierarchy to Face and from Vertex, Edge or Face to Object (provisional).
@@ -347,7 +348,7 @@ If saving changed that source, the reply still acknowledges the Save with
 `pending_action_status: source_changed`; the same pending action remains blocked
 against Discard until Cancel and reopening. A newer dirty snapshot or expired
 request retains the pending action. Cancel preserves uncertainty. Explicit
-Discard warns that a destination may already contain written bytes and abandons
+Don't Save (decision `discard`) warns that a destination may already contain written bytes and abandons
 the receipt only after a successful document replacement; Close retains it until
 actual Editor drop, including a failed close-response flush.
 
@@ -396,7 +397,7 @@ The [first-click text fix](../known-issues.md#first-click-text-input-can-be-lost
 
 ## Shutdown and verification
 
-Ingress EOF or protocol failure closes the bridge immediately, skips queued mutations and invokes the existing native close guard before SDK handler draining, except after a failed remote-close delivery attempt as described above. A clean editor closes. Unsaved committed scenes, including valid drafts committed by native close handling, prompt Save/Discard/Cancel confirmation, with Save enabled only for active-save or receipt-reconciliation eligibility. An invalid draft keeps the GUI open with a validation error; the user must fix or cancel that edit before Close can reach confirmation. This deliberately departs from MCP's recommendation to exit promptly for a dirty document. A client can forcibly terminate its subprocess and lose unsaved work; universal shutdown compatibility is not claimed. Cancelling native close does not revive an EOF-closed protocol connection.
+Ingress EOF or protocol failure closes the bridge immediately, skips queued mutations and invokes the existing native close guard before SDK handler draining, except after a failed remote-close delivery attempt as described above. A clean editor closes. Unsaved committed scenes, including valid drafts committed by native close handling, prompt Save/Don't Save/Cancel confirmation (decision `discard` for Don't Save), with Save enabled only for active-save or receipt-reconciliation eligibility. An invalid draft keeps the GUI open with a validation error; the user must fix or cancel that edit before Close can reach confirmation. This deliberately departs from MCP's recommendation to exit promptly for a dirty document. A client can forcibly terminate its subprocess and lose unsaved work; universal shutdown compatibility is not claimed. Cancelling native close does not revive an EOF-closed protocol connection.
 
 Approved native close cancels protocol work and uses a one-second bounded runtime shutdown rather than waiting indefinitely on silent stdin. The subprocess regression holds stdin open and checks bounded cleanup. Tests also cover actual Editor input/order/history, official SDK tool journeys, both lifecycles, cancellation, deadlines, floods, framing and stalled output. They use real Editor/egui state without an OS window. Native protocol/window verification and cross-platform graphical interaction remain separate evidence requirements.
 
@@ -493,7 +494,8 @@ Status values: `supported` means a registered tool or an `inspect_scene` field e
 | Tools | Numeric Move, Rotate and Scale and drag manipulation, cancel | supported | `begin_manipulation`, `update_manipulation`, `finish_manipulation` | `manipulation` | |
 | Tools | Rotate and Scale tool-settings space selector | supported | `set_tool_space` | `manipulation.rotate_space`, `manipulation.scale_space` | |
 | Tools | Persistent Rotate axis and Scale handle selection (tool-settings combo) | supported | `set_tool_handle` | `manipulation.rotate_axis`, `manipulation.scale_handle` | |
-| Tools | Manipulator size (+ and - keys on Move, Rotate and Scale) | supported | `set_manipulator_size` | `manipulation.manipulator_size` | Session-only; step, key repeat and the 36 px floor are PROVISIONAL |
+| Tools | Handle pick under the pointer (hover highlight and unsupported-handle status) | supported | `inspect_scene` | `manipulation.viewport.pointer_hit`, `manipulation.viewport.pointer_disabled`, `manipulation.viewport.pointer_refusal` | Active tool only; null during a manipulation; the refusal is Rotate and Scale only and includes drag-begin refusals; the null list is not exhaustive (see the pointer fields paragraph); not gated by window focus, popups or file modals (painted highlight, not status text) |
+| Tools | Manipulator size (+ and - keys on Move, Rotate and Scale) | supported | `set_manipulator_size` | `manipulation.manipulator_size` | Session-only; step, key repeat and the length floor are PROVISIONAL (rows 15 to 19 of the [policy constants table](development.md#application-policy-constants)) |
 | Tools | Gimbal, Parent, Normal, Custom and Component spaces; Move orientation modes other than World (listed disabled in the native Move row) | unsupported | | | |
 | Tools | Lasso, Paint Selection, Last Used buttons | unsupported | | | |
 | History | Undo and Redo | supported | `undo`, `redo` | `can_undo`, `can_redo` | |
@@ -569,10 +571,43 @@ with `manipulation_id`, `kind`, node and instance path, `space`, `axis` or
 (`translate`, `rotate` or `scale`) with the stored `baseline_channels` at begin
 and the live `current_channels`; and `refusal`, the reason the scene refused the
 last update of the active manipulation (the preview is unchanged), cleared by the
-next accepted update. Its optional `viewport` is Move-only and explicitly
-labelled `last_native_viewport_capture`. It separates visible axis geometry and
-unavailable reasons from the last captured pointer's optional hit. Missing or
-stale capture is unavailable. Visible geometry is not a global pickability or
+next accepted update. Its optional `viewport` is explicitly labelled
+`last_native_viewport_capture` and is absent without a current capture or in
+Face, Vertex and Edge selection. `axes` is Move-arrow geometry (visible axis
+geometry and unavailable reasons, with the Move frame's error when that frame is
+refused) whatever tool is active. `pointer_hit` is the active tool's enabled
+handle under the last captured pointer, picked by the same code as native hover
+and press: Move and Rotate `x`, `y` or `z`, Scale `x`, `y`, `z` or `uniform`,
+null for Select or no hit. `pointer_disabled` is `free_rotate`, `view_ring` or
+`scale_plane` when a drawn-but-unsupported handle is under the pointer and no
+enabled handle outranks it, else null. Both are null during an active
+manipulation, like native hover, and the geometric pick ignores per-handle
+refusals (those stay in `kinds`). `pointer_refusal` says why a press there
+would be refused, in the text native hover shows. With a `pointer_hit` it is
+that handle's refusal, drag-begin first (the suffix after "{space} {handle} {tool}: "); with a
+null `pointer_hit` it is the whole Rotate or Scale tool's refusal at every
+pixel (for example a mirrored frame; the suffix after "{tool} unavailable: "),
+reported only while the pointer is available. It is null for Move (native Move
+hover shows no reason; its refusals stay in `kinds` and `axes`), Select,
+disabled picks, accepted handles, no selection and an active manipulation. The
+text comes from fixed core messages and never carries a node name or path.
+The three pointer fields mirror the painted handle highlight, not the native
+hover status text. The highlight is not gated by window focus, an open popup
+or a file modal, so inspection is not either (the status text is, see
+`known-issues.md`). The null list is not exhaustive. `viewport` itself is
+null, for example, when the window is hidden or minimized, in Face, Vertex and
+Edge selection, and after a renderer terminal error. It is also null with no
+valid capture yet, after a scene load and after a camera change, the last two
+until the next viewport capture. With a `viewport` present, the pointer fields
+are null when the pointer has left the window, a manipulation is active, or the
+Select tool is active. Press-time guards that depend on window state (for
+example modal, popup, focus, modifier keys, file closing, stale scene token,
+pending draft) are never reflected. Refusals raised when a Rotate or Scale drag
+begins are included, and win over the scene's refusal as they do on press, for
+example an edge-on Rotate ring or a Scale grab whose along-axis component is
+under 1 px of world length (a ring plane behind the camera along the press ray
+is expected from `HandleError::BehindRay` but not yet reproduced). Native hover shows the same text with the handle label.
+Visible geometry is not a global pickability or
 Ready claim, especially in tiny viewports and the excluded center region.
 Baseline Scalars and source bytes are never exposed.
 
