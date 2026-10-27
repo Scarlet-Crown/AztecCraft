@@ -1138,5 +1138,5 @@ pub fn decode(source: Arc<[u8]>) -> Result<NativeScene, AsciiError> {
 mod tests;
 #[cfg(any(unix, test))]
 pub(crate) mod write;
-#[cfg(any(unix, test))]
+#[cfg(test)]
 pub(super) use write::{AsciiWriteRefusal, emit_geometry_prefix};
