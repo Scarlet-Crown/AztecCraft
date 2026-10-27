@@ -247,7 +247,7 @@ fn an_axis_box_drag_scales_by_the_parameter_ratio_in_one_scale_history_entry() {
         view.screen(Vec3::X * radius * 0.5),
     );
     assert_eq!(editor.status, "Scale committed");
-    assert_eq!(editor.history.undo_label(), Some("Scale".to_string()));
+    assert_eq!(editor.history.undo_label().as_deref(), Some("Scale"));
     editor.native_operation(Operation::Undo);
     assert_eq!(channels(&editor)[6], 1.0);
 }
