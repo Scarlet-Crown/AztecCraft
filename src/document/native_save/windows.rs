@@ -545,7 +545,9 @@ impl Receipt {
         self.destination.verify(&self.file, &self.bytes)?;
         let baseline = SourceBaseline {
             bytes: self.bytes.clone(),
-            parse_bytes: self.parse_bytes.clone(),
+            retention: crate::document::Retention::Source {
+                parse_bytes: self.parse_bytes.clone(),
+            },
             metadata: self.file.metadata().map_err(io_error)?,
             link: LinkStatus::Direct,
             file: self.file.clone(),
