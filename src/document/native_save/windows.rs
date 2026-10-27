@@ -545,9 +545,7 @@ impl Receipt {
         self.destination.verify(&self.file, &self.bytes)?;
         let baseline = SourceBaseline {
             bytes: self.bytes.clone(),
-            retention: crate::document::Retention::Source {
-                parse_bytes: self.parse_bytes.clone(),
-            },
+            parse_bytes: self.parse_bytes.clone(),
             metadata: self.file.metadata().map_err(io_error)?,
             link: LinkStatus::Direct,
             file: self.file.clone(),
@@ -571,9 +569,7 @@ fn prepare<'a>(
     let NativeOrigin::Binary(source) = origin else {
         return Err(Error::Unsupported);
     };
-    let crate::document::Retention::Source { parse_bytes } = &source.retention else {
-        return Err(Error::SourceChanged);
-    };
+    let parse_bytes = &source.parse_bytes;
     if !scene.has_binary_source(parse_bytes) {
         return Err(Error::SourceChanged);
     }

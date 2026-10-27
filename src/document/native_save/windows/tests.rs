@@ -15,10 +15,7 @@ fn opened(directory: &Path) -> (PathBuf, crate::document::NativeDocument) {
     (path, document)
 }
 fn parse_bytes(baseline: &SourceBaseline) -> Arc<[u8]> {
-    match &baseline.retention {
-        crate::document::Retention::Source { parse_bytes } => parse_bytes.clone(),
-        crate::document::Retention::Authored => panic!("expected a source baseline"),
-    }
+    baseline.parse_bytes.clone()
 }
 fn saved(result: Result<SaveOutcome, Error>) -> (NativeOrigin, PathBuf) {
     match result.unwrap() {
