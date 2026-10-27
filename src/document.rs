@@ -74,6 +74,7 @@ impl NativeOrigin {
                 {
                     true
                 }
+                #[cfg(unix)]
                 Self::AuthoredAscii(source)
                     if matches!(source.link, LinkStatus::Direct)
                         && source.destination.is_some() =>

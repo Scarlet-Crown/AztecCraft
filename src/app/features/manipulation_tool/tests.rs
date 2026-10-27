@@ -517,7 +517,7 @@ fn a_y_scale_handle_drag_scales_y_only_in_one_scale_history_entry() {
             view.screen(Vec3::Y * radius * 0.5),
         );
         assert_eq!(editor.status, "Scale committed");
-        assert_eq!(editor.history.undo_label(), Some("Scale".to_string()));
+        assert_eq!(editor.history.undo_label().as_deref(), Some("Scale"));
         editor.native_operation(Operation::Undo);
         assert_eq!(channels(&editor)[7], 1.0);
     }

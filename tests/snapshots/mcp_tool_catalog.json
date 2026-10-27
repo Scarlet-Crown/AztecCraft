@@ -2004,7 +2004,7 @@
   },
   {
     "name": "save_scene_as",
-    "description": "Save a supported Maya binary scene to a fresh .mb path without overwriting; an uncertain prior save is reconciled instead",
+    "description": "Save a supported Maya binary scene to a fresh .mb path, or an authored untitled scene to a fresh .ma path, without overwriting; an uncertain prior save is reconciled instead",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,

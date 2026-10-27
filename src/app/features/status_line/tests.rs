@@ -1610,4 +1610,3 @@ fn closing_file_clicks_change_nothing() {
         }
     }
 }
-
