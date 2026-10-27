@@ -42,6 +42,7 @@ fn undo_and_redo_restore_every_authoring_state_in_order() {
                 rotation: [45.0, 30.0, 60.0],
                 scale: [-2.0, 3.0, 4.0],
             },
+            label: None,
         })
         .unwrap();
     states.push(history.scene().nodes().to_vec());
@@ -97,6 +98,7 @@ fn failed_commands_preserve_scene_and_both_history_stacks() {
                 scale: [f64::NAN; 3],
                 ..NativeTransform::default()
             },
+            label: None,
         },
     ] {
         assert!(history.execute(command).is_err());
@@ -163,7 +165,8 @@ fn no_op_edits_do_not_consume_undo_or_invalidate_redo() {
         history
             .execute(Command::SetTransform {
                 id,
-                transform: NativeTransform::default()
+                transform: NativeTransform::default(),
+                label: None,
             })
             .unwrap(),
         EditOutcome::Unchanged
@@ -194,7 +197,8 @@ fn loaded_scene_starts_without_history_and_missing_nodes_return_errors() {
     assert_eq!(
         history.execute(Command::SetTransform {
             id,
-            transform: NativeTransform::default()
+            transform: NativeTransform::default(),
+            label: None,
         }),
         Err(NativeError::Legacy(SceneError::MissingNode(id)))
     );
@@ -341,6 +345,11 @@ fn rename(history: &mut History, id: NodeId, n: usize) {
 /// Mirrors the editor's dirty test (`history.scene() != saved`, src/file_ui.rs).
 fn is_dirty(history: &History, saved: &NativeScene) -> bool {
     history.scene() != saved
+}
+
+#[test]
+fn undo_limit_is_pinned_to_fifty() {
+    assert_eq!(UNDO_LIMIT, 50);
 }
 
 #[test]

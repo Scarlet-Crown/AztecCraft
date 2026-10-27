@@ -1731,6 +1731,68 @@ fn channel_box_is_blank_with_nothing_selected() {
 }
 
 #[test]
+fn read_only_scene_is_marked_in_the_title_and_file_menu() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("curve.ma");
+    std::fs::write(&path, ascii_fixture::specimen()).unwrap();
+    let mut editor = Editor::default();
+    editor
+        .apply_operation(Operation::OpenScene { path })
+        .unwrap();
+    assert_eq!(editor.document_title(), "AztecCraft | curve.ma (read-only)");
+    let reason = editor.read_only_reason().unwrap();
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    let file = face_text_position(&output, "File");
+    let output = face_pointer_click(&mut editor, &ctx, file, egui::Modifiers::NONE, vec![]);
+    let marker = face_text_position(&output, &format!("Read-only scene: {reason}"));
+    assert!(marker.y < face_text_position(&output, "Close").y);
+
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    assert_eq!(editor.document_title(), "AztecCraft | Untitled *");
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    let file = face_text_position(&output, "File");
+    let output = face_pointer_click(&mut editor, &ctx, file, egui::Modifiers::NONE, vec![]);
+    face_text_position(&output, "Close");
+    assert!(!output.shapes.iter().any(|shape| matches!(
+        &shape.shape,
+        egui::Shape::Text(text) if text.galley.job.text.starts_with("Read-only scene")
+    )));
+}
+
+#[test]
+fn unsaved_prompt_for_an_untitled_scene_uses_mayas_wording_and_buttons() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    editor.new_document().unwrap();
+    assert!(editor.files.is_modal());
+    let ctx = egui::Context::default();
+    let output = frame(&mut editor, &ctx, vec![]);
+    for text in [
+        "Warning: Scene Not Saved",
+        "Save changes to untitled scene?",
+    ] {
+        face_text_position(&output, text);
+    }
+    let buttons: Vec<f32> = ["Save", "Don't Save", "Cancel"]
+        .iter()
+        .map(|label| face_text_position(&output, label).x)
+        .collect();
+    assert!(
+        buttons.windows(2).all(|pair| pair[0] < pair[1]),
+        "{buttons:?}"
+    );
+    // An untitled scene cannot be saved in place yet (Maya would Save As), so Save is inert.
+    let before = editor.history.scene().clone();
+    let save = face_text_position(&output, "Save");
+    face_pointer_click(&mut editor, &ctx, save, egui::Modifiers::NONE, vec![]);
+    assert!(editor.files.is_modal());
+    assert_eq!(editor.history.scene(), &before);
+}
+
+#[test]
 fn help_line_carries_the_read_only_reason_and_curves_note() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("curve.ma");
@@ -2169,6 +2231,124 @@ fn display_menu_shows_grid_options_disabled_with_the_default_grid_reason() {
         before
     );
     assert!(super::menus::GRID_OPTIONS_REASON.contains("+/-12 units (PROVISIONAL)"));
+}
+
+/// Maya 2025.1's SelectNone runs `changeSelectMode -component; changeSelectMode -object;
+/// select -cl`, so Deselect All also leaves component and hierarchy modes (#167).
+#[test]
+fn deselect_all_clears_object_and_components_and_returns_to_object_mode() {
+    let changed = |reply: Result<OperationReply, OperationError>| {
+        matches!(reply.unwrap(), OperationReply::Changed)
+    };
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let cap = selected_face(&editor, 0);
+    remote(
+        &mut editor,
+        Operation::SetSelectionMode(SelectionMode::Face),
+    )
+    .unwrap();
+    remote(&mut editor, Operation::SelectFace { target: Some(cap) }).unwrap();
+    assert!(changed(remote(&mut editor, Operation::DeselectAll)));
+    assert_eq!(editor.selection_mode, SelectionMode::Object);
+    assert_eq!(editor.selection_presentation().0, None);
+    assert!(editor.remembered_face.is_none());
+    assert!(!changed(remote(&mut editor, Operation::DeselectAll)));
+    remote(
+        &mut editor,
+        Operation::SetSelectionMode(SelectionMode::Hierarchy),
+    )
+    .unwrap();
+    assert!(changed(remote(&mut editor, Operation::DeselectAll)));
+    assert_eq!(editor.selection_mode, SelectionMode::Object);
+}
+
+#[test]
+fn alt_d_deselects_all_and_other_d_chords_do_not() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let id = editor.single_target().unwrap().0;
+    let mac_cmd = egui::Modifiers {
+        mac_cmd: true,
+        command: true,
+        ..Default::default()
+    };
+    for modifiers in [
+        egui::Modifiers::NONE,
+        egui::Modifiers::CTRL,
+        egui::Modifiers::SHIFT,
+        egui::Modifiers::ALT | egui::Modifiers::SHIFT,
+        // AltGr arrives as Ctrl+Alt on Windows; Alt+Cmd is another chord on macOS.
+        egui::Modifiers::ALT | egui::Modifiers::CTRL,
+        egui::Modifiers::ALT | mac_cmd,
+    ] {
+        shortcuts_events(
+            &mut editor,
+            modifiers,
+            vec![key_event(Key::D, modifiers, false)],
+        );
+        assert!(editor.selection_presentation().0.is_some(), "{modifiers:?}");
+    }
+    let alt = egui::Modifiers::ALT;
+    let ctx = egui::Context::default();
+    shortcuts_in(&ctx, &mut editor, alt, vec![key_event(Key::D, alt, false)]);
+    assert_eq!(editor.selection_presentation().0, None);
+    // Holding the chord repeats nothing: the key is already down in this context.
+    editor.select(Some(id));
+    shortcuts_in(&ctx, &mut editor, alt, vec![key_event(Key::D, alt, true)]);
+    assert_eq!(editor.selection_presentation().0, Some(id));
+}
+
+#[test]
+fn ctrl_shift_a_reports_that_select_all_needs_multi_selection() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let selected = editor.selection_presentation().0;
+    let chord = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    shortcuts_events(&mut editor, chord, vec![key_event(Key::A, chord, false)]);
+    assert_eq!(editor.status, super::menus::SELECT_ALL_STATUS);
+    assert!(!editor.error);
+    assert_eq!(editor.selection_presentation().0, selected);
+}
+
+#[test]
+fn select_menu_rows_follow_maya_order_and_only_deselect_all_acts() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let ctx = egui::Context::default();
+    ctx.enable_accesskit();
+    let output = frame(&mut editor, &ctx, vec![]);
+    let menu = face_text_position(&output, "Select");
+    let output = face_pointer_click(&mut editor, &ctx, menu, egui::Modifiers::NONE, vec![]);
+    let rows = [
+        "All   Ctrl/Cmd Shift A",
+        "All by Type",
+        "Deselect All   Alt D",
+        "Hierarchy",
+        "Inverse",
+        "Object / Component   F8",
+    ];
+    let ys: Vec<f32> = rows
+        .iter()
+        .map(|label| face_text_position(&output, label).y)
+        .collect();
+    assert!(
+        ys.windows(2).all(|pair| pair[0] < pair[1]),
+        "rows out of order: {ys:?}"
+    );
+    for label in ["All   Ctrl/Cmd Shift A", "Hierarchy", "Inverse"] {
+        face_pointer_click(
+            &mut editor,
+            &ctx,
+            face_text_position(&output, label),
+            egui::Modifiers::NONE,
+            vec![],
+        );
+        assert!(editor.selection_presentation().0.is_some(), "{label}");
+    }
+    let deselect = face_text_position(&output, "Deselect All   Alt D");
+    face_pointer_click(&mut editor, &ctx, deselect, egui::Modifiers::NONE, vec![]);
+    assert_eq!(editor.selection_presentation().0, None);
 }
 
 #[test]
@@ -4448,7 +4628,7 @@ fn face_native_menu_explicit_face_beats_toggle_and_modal_replacement_drops_inten
     assert!(editor.files.is_modal());
     assert_eq!(editor.selection_mode, SelectionMode::Object);
     let output = frame(&mut editor, &ctx, vec![]);
-    let discard = face_text_position(&output, "Discard");
+    let discard = face_text_position(&output, "Don't Save");
     face_pointer_click(
         &mut editor,
         &ctx,
@@ -4971,6 +5151,7 @@ fn real_channel_text_keeps_f64_precision_and_untouched_slots_in_one_undo() {
                 translation: [0.0, 1.0000000000000004, 0.0],
                 ..Default::default()
             },
+            label: None,
         })
         .unwrap();
     editor.sync_fields();
@@ -8976,12 +9157,12 @@ fn set_camera_pose_changes_only_the_camera_and_reports_unchanged_on_repeat() {
         7.0_f32.rem_euclid(std::f32::consts::TAU)
     );
     assert_eq!(
-        [
-            editor.camera.fov_y(),
+        (
+            editor.camera.lens(),
             editor.camera.near(),
             editor.camera.far()
-        ],
-        [lens.fov_y(), lens.near(), lens.far()]
+        ),
+        (lens.lens(), lens.near(), lens.far())
     );
     let again = remote_pose(&mut editor, token, pose_op(7.0, 0.2, 5.0)).unwrap();
     assert!(matches!(again, OperationReply::Unchanged));
@@ -8989,6 +9170,25 @@ fn set_camera_pose_changes_only_the_camera_and_reports_unchanged_on_repeat() {
     assert_eq!(editor.is_dirty(), dirty);
     assert_eq!(editor.history.scene(), &scene);
     assert_eq!(editor.history.can_undo(), undoable);
+}
+
+#[test]
+fn inspect_fov_tracks_the_viewport_aspect() {
+    let mut editor = Editor::default();
+    for aspect in [1.0_f32, 2.0] {
+        editor.aspect = aspect;
+        let tan_y = if aspect >= 1.4173 / 0.9449 {
+            1.4173_f32 * 25.4 / 70.0 / aspect
+        } else {
+            0.9449_f32 * 25.4 / 70.0
+        };
+        let expected = f64::from(2.0 * tan_y.atan()).to_degrees();
+        let actual = editor.inspect(false).unwrap().camera.fov_y_degrees;
+        assert!(
+            (actual - expected).abs() < 1e-4,
+            "aspect {aspect}: {actual}"
+        );
+    }
 }
 
 #[test]
@@ -9149,4 +9349,49 @@ fn alt_home_and_default_view_are_refused_while_modal_or_closing() {
     editor.default_view();
     assert_eq!(editor.camera, disturbed, "menu path while closing");
     assert!(editor.error);
+}
+
+#[test]
+fn selection_mode_camera_tool_and_panel_changes_add_no_undo_entry() {
+    let mut editor = Editor::default();
+    editor.create(Primitive::Cube);
+    let id = editor.single_target().unwrap().0;
+    remote(
+        &mut editor,
+        Operation::Rename {
+            id,
+            name: "renamed".into(),
+        },
+    )
+    .unwrap();
+    remote(&mut editor, Operation::Undo).unwrap();
+    let undo = editor.history.undo_label();
+    let redo = editor.history.redo_label();
+    assert!(redo.is_some());
+    for operation in [
+        Operation::Select {
+            node: None,
+            instance_path: None,
+        },
+        Operation::Select {
+            node: Some(id),
+            instance_path: None,
+        },
+        Operation::SetSelectionMode(SelectionMode::Hierarchy),
+        Operation::SetSelectionMode(SelectionMode::Object),
+        Operation::Orbit {
+            radians: [0.1, 0.1],
+        },
+        Operation::Pan {
+            world_units: [0.5, 0.5],
+        },
+        Operation::Dolly { factor: 1.5 },
+        Operation::FrameSelected,
+        Operation::SetActiveTool(ActiveTool::Move),
+        Operation::SetGridVisible { visible: false },
+    ] {
+        remote(&mut editor, operation).unwrap();
+        assert_eq!(editor.history.undo_label(), undo);
+        assert_eq!(editor.history.redo_label(), redo);
+    }
 }
