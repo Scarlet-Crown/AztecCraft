@@ -452,7 +452,12 @@ impl AtomicFs for Transaction<'_> {
     }
     fn create_new(&self, path: &Path, _: NewFilePermissions) -> io::Result<File> {
         let leaf = self.destination.stage_leaf(path).map_err(|_| {
-            let error = self.state.borrow().failure.clone().unwrap_or(Error::Unsupported);
+            let error = self
+                .state
+                .borrow()
+                .failure
+                .clone()
+                .unwrap_or(Error::Unsupported);
             self.fail(error)
         })?;
         if let Some(baseline) = self.baseline {

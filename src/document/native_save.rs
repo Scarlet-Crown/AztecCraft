@@ -36,7 +36,9 @@ impl fmt::Display for NativeSaveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unsupported => f.write_str("this native scene or platform cannot be written"),
-            Self::InvalidDestination => f.write_str("Save As requires a new .mb or .ma destination"),
+            Self::InvalidDestination => {
+                f.write_str("Save As requires a new .mb or .ma destination")
+            }
             Self::SourceChanged => {
                 f.write_str("scene file or directory identity or contents changed")
             }

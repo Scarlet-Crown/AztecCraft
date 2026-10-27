@@ -70,7 +70,7 @@ impl Command {
             Self::Remove(_) => "Delete".to_string(),
             Self::Rename { .. } => "Rename".to_string(),
             Self::SetTransform { transform, .. } => {
-               // Compare with default values to guess the action.
+                // Compare with default values to guess the action.
                 if transform.rotation.iter().any(|&v| v != 0.0)
                     && transform.scale == [1.0, 1.0, 1.0]
                 {

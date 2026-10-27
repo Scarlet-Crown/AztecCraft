@@ -88,9 +88,9 @@ impl NativeOrigin {
         false
     }
     pub fn save_as_available(&self) -> bool {
-        cfg!(any(unix, windows)) 
+        cfg!(any(unix, windows))
             && matches!(
-                self, 
+                self,
                 Self::Binary(_) | Self::AuthoredAscii(_) | Self::Untitled
             )
     }
