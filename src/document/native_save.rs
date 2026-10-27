@@ -9,6 +9,10 @@ use std::{
 mod unix;
 #[cfg(unix)]
 pub(super) use unix::Destination;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub(super) use windows::Destination;
 
 pub enum SaveDestination<'a> {
     Active,
@@ -49,6 +53,8 @@ impl std::error::Error for NativeSaveError {}
 pub struct SaveReceipt {
     #[cfg(unix)]
     inner: unix::Receipt,
+    #[cfg(windows)]
+    inner: windows::Receipt,
 }
 
 impl fmt::Debug for SaveReceipt {
@@ -82,11 +88,11 @@ impl fmt::Debug for SaveOutcome {
 
 impl SaveReceipt {
     pub fn reconcile(&self) -> Result<(NativeOrigin, PathBuf), NativeSaveError> {
-        #[cfg(unix)]
+        #[cfg(any(unix, windows))]
         {
             self.inner.reconcile()
         }
-        #[cfg(not(unix))]
+        #[cfg(not(any(unix, windows)))]
         {
             Err(NativeSaveError::Unsupported)
         }
@@ -108,7 +114,11 @@ pub fn save_native(
             _ => unix::save_native(origin, scene, destination, may_install),
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::save_native(origin, scene, destination, may_install)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (origin, scene, destination, may_install);
         Err(NativeSaveError::Unsupported)

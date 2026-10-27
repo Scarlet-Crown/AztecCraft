@@ -28,8 +28,7 @@ pub(super) const OPEN_FILTERS: [(&str, &[&str]); 4] = [
     ("Legacy AztecCraft scene", &["aztec"]),
 ];
 
-/// The unsaved-changes prompt, worded as Maya 2025.1's `saveChanges.mel`: the heading and the
-/// question for a scene with a path, then for an untitled one (#189).
+/// The unsaved-changes prompt, worded as Maya 2025.1's `saveChanges.mel`.
 pub(super) fn save_changes_prompt(path: Option<&Path>) -> (&'static str, String) {
     match path {
         Some(path) => (
@@ -43,11 +42,11 @@ pub(super) fn save_changes_prompt(path: Option<&Path>) -> (&'static str, String)
     }
 }
 
-/// Why the prompt's Save is disabled outside reconciliation. Maya's Save runs Save As for an
-/// untitled scene; this build saves in place only an opened Maya Binary scene on macOS or Linux.
-pub(super) const PROMPT_SAVE_UNAVAILABLE: &str = "Not available: this build saves in place only an opened Maya Binary scene on macOS or Linux (#156, #15)";
+/// Why the prompt's Save is disabled outside reconciliation.
+pub(super) const PROMPT_SAVE_UNAVAILABLE: &str =
+    "Not available: this build saves in place only an opened Maya Binary scene (#156, #15)";
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, any(unix, windows)))]
 mod binary_fixture {
     include!("../tests/support/maya_binary.rs");
 }
@@ -792,7 +791,7 @@ mod tests {
         true
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn native_save_as_active_save_and_history_use_one_live_document() {
         let directory = tempfile::tempdir().unwrap();
@@ -1301,7 +1300,7 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn save_acknowledges_s1_but_blocks_the_same_file_queued_open_s0() {
         let directory = tempfile::tempdir().unwrap();
@@ -1383,7 +1382,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn cancellation_after_install_acknowledges_save_without_consuming_pending_new() {
         let directory = tempfile::tempdir().unwrap();
@@ -1448,7 +1447,7 @@ mod tests {
         assert!(!editor.is_dirty());
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn native_save_as_from_read_through_symlink_preserves_original_and_verifies_origin() {
         let directory = tempfile::tempdir().unwrap();
@@ -1457,7 +1456,14 @@ mod tests {
         let destination = directory.path().join("fresh.mb");
         let original = binary_fixture::specimen();
         std::fs::write(&source, &original).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink(&source, &link).unwrap();
+        // Windows symbolic links need Developer Mode or elevation; skip where unavailable.
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_file(&source, &link).is_err() {
+            eprintln!("SKIPPED: this account cannot create symbolic links");
+            return;
+        }
         let mut editor = Editor::default();
         editor
             .apply_operation(Operation::OpenScene { path: link.clone() })
@@ -1856,7 +1862,7 @@ mod tests {
         assert_eq!(std::fs::read(path).unwrap(), b"changed after staging");
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn save_acknowledges_binary_and_revalidates_queued_ascii_without_rewriting_it() {
         for changed in [false, true] {
