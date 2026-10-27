@@ -245,6 +245,9 @@ pub enum Operation {
         instance_path: Option<Vec<NativeId>>,
     },
     SetSelectionMode(SelectionMode),
+    /// Maya's Select > Deselect All (`SelectNone`, Alt+D): clears the object and component
+    /// selection and returns to Object selection mode (#167).
+    DeselectAll,
     SelectFace {
         target: Option<FaceTarget>,
     },
