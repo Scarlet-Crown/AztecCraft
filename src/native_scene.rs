@@ -502,10 +502,21 @@ pub const MAX_TRANSFORM_PATHS: usize = 4096;
 pub const MAX_TRANSFORM_DEPTH: usize = 256;
 pub const MAX_PATH_IDENTITIES: usize = 65536;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TransformTarget {
     pub node: NodeId,
     pub path: Vec<NativeId>,
+}
+
+/// Private save authority for one authored document, preserved by scene/history clones.
+/// It is metadata, excluded from scene equality, Debug and file serialization.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AuthoredDocumentId(Uuid);
+
+impl AuthoredDocumentId {
+    fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
 }
 
 #[derive(Clone)]
@@ -516,6 +527,8 @@ pub struct NativeScene {
     dag: Vec<DagEdge>,
     units: Units,
     source: Option<SourceRetention>,
+    #[cfg_attr(not(unix), expect(dead_code, reason = "authored saving is Unix-only"))]
+    authored_document_id: AuthoredDocumentId,
     materials: Vec<appearance::MaterialDiffuse>,
     session_materials: SessionMaterials,
     next_id: u64,
@@ -595,6 +608,7 @@ impl InternalTransform {
     }
 }
 
+// Document identity is save authority, not editable scene content or dirty state.
 impl PartialEq for NativeScene {
     fn eq(&self, other: &Self) -> bool {
         self.nodes == other.nodes
@@ -617,6 +631,7 @@ impl Default for NativeScene {
             dag: Vec::new(),
             units: Units::default(),
             source: None,
+            authored_document_id: AuthoredDocumentId::new(),
             materials: Vec::new(),
             session_materials: SessionMaterials::default(),
             next_id: 1,
@@ -626,6 +641,11 @@ impl Default for NativeScene {
 }
 
 impl NativeScene {
+    /// Save authority is available only for a scene authored without a parsed source.
+    #[cfg(unix)]
+    pub(crate) fn authored_document_id(&self) -> Option<AuthoredDocumentId> {
+        self.source.is_none().then_some(self.authored_document_id)
+    }
     #[cfg(any(unix, windows))]
     pub(crate) fn has_binary_source(&self, bytes: &std::sync::Arc<[u8]>) -> bool {
         self.source.as_ref().is_some_and(|source| {
@@ -821,6 +841,22 @@ impl NativeScene {
         }
         paths.sort_unstable_by(|a, b| a.path.cmp(&b.path));
         Ok(paths)
+    }
+    /// Every transform instance strictly below one of `roots`, in `transform_paths` order. A root
+    /// is not its own descendant; an instance below two roots appears once.
+    pub fn descendant_targets(
+        &self,
+        roots: &[TransformTarget],
+    ) -> Result<Vec<TransformTarget>, NativeError> {
+        let root_paths: std::collections::HashSet<&[NativeId]> =
+            roots.iter().map(|root| root.path.as_slice()).collect();
+        Ok(self
+            .transform_paths()?
+            .into_iter()
+            .filter(|target| {
+                (1..target.path.len()).any(|len| root_paths.contains(&target.path[..len]))
+            })
+            .collect())
     }
     pub fn internal_transform(&self, id: NodeId) -> Result<InternalTransform, NativeError> {
         let node = self.node(id)?;
@@ -1253,6 +1289,23 @@ impl NativeScene {
     pub fn remove(&mut self, id: NodeId) -> Result<(), NativeError> {
         self.authoring_preflight()?;
         self.validate()?;
+        self.remove_validated(id)
+    }
+    /// Removes every listed node, in order, after one preflight and one validation; a repeated id
+    /// is removed once. The first refusal is returned unchanged and earlier removals stay applied,
+    /// so callers run it on a candidate clone, as `History::execute` does.
+    pub fn remove_many(&mut self, ids: &[NodeId]) -> Result<(), NativeError> {
+        self.authoring_preflight()?;
+        self.validate()?;
+        let mut seen = std::collections::HashSet::new();
+        for id in ids {
+            if seen.insert(*id) {
+                self.remove_validated(*id)?;
+            }
+        }
+        Ok(())
+    }
+    fn remove_validated(&mut self, id: NodeId) -> Result<(), NativeError> {
         let index = self
             .nodes
             .iter()

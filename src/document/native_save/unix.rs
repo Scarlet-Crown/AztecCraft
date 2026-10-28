@@ -186,6 +186,7 @@ struct Transaction<'a> {
     baseline: Option<&'a SourceBaseline>,
     bytes: Arc<[u8]>,
     parse_bytes: Arc<[u8]>,
+    authored_document_id: Option<crate::native_scene::AuthoredDocumentId>,
     may_install: &'a dyn Fn() -> bool,
     state: RefCell<State>,
 }
@@ -334,6 +335,7 @@ impl Transaction<'_> {
             destination: self.destination.clone(),
             bytes: self.bytes.clone(),
             parse_bytes: self.parse_bytes.clone(),
+            authored_document_id: self.authored_document_id,
             file: file.clone(),
         };
         let cause = state
@@ -445,6 +447,7 @@ pub(super) struct Receipt {
     destination: Arc<Destination>,
     bytes: Arc<[u8]>,
     parse_bytes: Arc<[u8]>,
+    authored_document_id: Option<crate::native_scene::AuthoredDocumentId>,
     file: Arc<File>,
 }
 impl Receipt {
@@ -454,6 +457,7 @@ impl Receipt {
         let baseline = SourceBaseline {
             bytes: self.bytes.clone(),
             parse_bytes: self.parse_bytes.clone(),
+            authored_document_id: self.authored_document_id,
             metadata: self.file.metadata().map_err(io_error)?,
             link: LinkStatus::Direct,
             file: self.file.clone(),
@@ -521,6 +525,7 @@ fn prepare<'a>(
         baseline,
         bytes,
         parse_bytes: source.parse_bytes.clone(),
+        authored_document_id: None,
         may_install,
         state: RefCell::new(State::default()),
     })
@@ -536,16 +541,24 @@ pub(super) fn save_native(
     transaction.run(&transaction, RenameRetry::platform())
 }
 
-pub(super) fn save_authored(
-    origin: &NativeOrigin,
+fn prepare_authored<'a>(
+    origin: &'a NativeOrigin,
     scene: &NativeScene,
     destination: SaveDestination<'_>,
-    may_install: &dyn Fn() -> bool,
-) -> Result<SaveOutcome, Error> {
-    // NOTE: The Maya ASCII writer produces valid files, but AztecCraft's own
-    // Maya ASCII reader currently supports a narrower subset (curves only).
-    // Opening a saved `.ma` mesh scene back into AztecCraft is not yet supported;
-    // it is tracked separately. The file is valid Maya ASCII and opens in Maya.
+    may_install: &'a dyn Fn() -> bool,
+) -> Result<Transaction<'a>, Error> {
+    // Authored output has unproven Maya acceptance; our ASCII reader cannot
+    // reopen authored meshes. Bind every later save to this document.
+    match origin {
+        NativeOrigin::Untitled => {}
+        NativeOrigin::AuthoredAscii(source) => {
+            let id = scene.authored_document_id().ok_or(Error::SourceChanged)?;
+            if source.authored_document_id != Some(id) {
+                return Err(Error::SourceChanged);
+            }
+        }
+        _ => return Err(Error::Unsupported),
+    }
 
     // Resolve the destination path and determine if it is Save As or Active
     let (path, is_save_as) = match destination {
@@ -570,6 +583,8 @@ pub(super) fn save_authored(
     let bytes: Arc<[u8]> = emit_geometry_prefix(scene)
         .map_err(Error::AsciiWrite)?
         .into();
+
+    let document_id = scene.authored_document_id().ok_or(Error::SourceChanged)?;
 
     // Capture the destination
     let destination = Arc::new(Destination::capture(&path).map_err(io_error)?);
@@ -599,11 +614,21 @@ pub(super) fn save_authored(
         baseline,
         bytes,
         parse_bytes: Arc::new([]),
+        authored_document_id: Some(document_id),
         may_install,
         state: RefCell::new(State::default()),
     };
 
-    // Execute
+    Ok(transaction)
+}
+
+pub(super) fn save_authored(
+    origin: &NativeOrigin,
+    scene: &NativeScene,
+    destination: SaveDestination<'_>,
+    may_install: &dyn Fn() -> bool,
+) -> Result<SaveOutcome, Error> {
+    let transaction = prepare_authored(origin, scene, destination, may_install)?;
     transaction.run(&transaction, RenameRetry::platform())
 }
 

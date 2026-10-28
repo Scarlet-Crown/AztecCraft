@@ -114,19 +114,24 @@ mod official_client {
 
     mod ascii;
     mod attribute_editor;
+    #[cfg(unix)]
+    mod authored_ascii_save;
     mod camera;
     mod cylinder_cone;
+    mod delete_selected;
     mod deselect_all;
     mod extrude;
     mod files;
     mod frame_all;
     mod grid;
+    mod inspect_budget;
     mod manipulation_mcp_tests;
     mod manipulator_size;
     mod material;
     mod node_edit;
     mod pointer_hit;
     mod primitive_options;
+    mod select_by_rule;
     mod selection;
     mod session;
     mod session_material;

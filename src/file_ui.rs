@@ -401,8 +401,7 @@ impl Editor {
         self.move_viewport = None;
         self.manipulation.declared = None;
         self.clear_manipulation_hover();
-        self.selected = None;
-        self.selected_path.clear();
+        self.selection.clear();
         self.clear_remembered_components();
         self.name.clear();
         self.channels = Default::default();
@@ -1647,16 +1646,16 @@ mod tests {
             assert!(!editor.history.can_redo());
         }
         let selection = (
-            editor.selected,
-            editor.selected_path.clone(),
+            editor.selected(),
+            editor.selected_path().to_vec(),
             editor.remembered_face.clone(),
         );
         editor.open_path(&bad);
         assert!(editor.error);
         assert_eq!(
             (
-                editor.selected,
-                editor.selected_path.clone(),
+                editor.selected(),
+                editor.selected_path().to_vec(),
                 editor.remembered_face.clone()
             ),
             selection
@@ -1673,8 +1672,8 @@ mod tests {
             assert_eq!(editor.selection_mode, SelectionMode::Face);
             assert_eq!(
                 (
-                    editor.selected,
-                    editor.selected_path.clone(),
+                    editor.selected(),
+                    editor.selected_path().to_vec(),
                     editor.remembered_face.clone()
                 ),
                 selection
@@ -1696,8 +1695,8 @@ mod tests {
         editor.name = name;
         editor.new_document().unwrap();
         assert_eq!(editor.selection_mode, SelectionMode::Face);
-        assert_eq!(editor.selected, None);
-        assert!(editor.selected_path.is_empty());
+        assert_eq!(editor.selected(), None);
+        assert!(editor.selected_path().is_empty());
         assert_eq!(editor.remembered_face, None);
         assert_ne!(editor.scene_token, token);
         editor.open_path(&path);
@@ -1718,8 +1717,8 @@ mod tests {
         editor.open_path(&other);
         assert!(!editor.error);
         assert_eq!(editor.selection_mode, SelectionMode::Face);
-        assert_eq!(editor.selected, None);
-        assert!(editor.selected_path.is_empty());
+        assert_eq!(editor.selected(), None);
+        assert!(editor.selected_path().is_empty());
         assert_eq!(editor.remembered_face, None);
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
 
@@ -1739,8 +1738,8 @@ mod tests {
         let legacy_token = editor.scene_token;
         let legacy_camera = editor.camera.clone();
         let legacy_selection = (
-            editor.selected,
-            editor.selected_path.clone(),
+            editor.selected(),
+            editor.selected_path().to_vec(),
             editor.remembered_face.clone(),
         );
         editor.name = "committed_before_cancel".into();
@@ -1764,8 +1763,8 @@ mod tests {
             assert_eq!(editor.selection_mode, SelectionMode::Face);
             assert_eq!(
                 (
-                    editor.selected,
-                    editor.selected_path.clone(),
+                    editor.selected(),
+                    editor.selected_path().to_vec(),
                     editor.remembered_face.clone()
                 ),
                 legacy_selection
@@ -1794,7 +1793,7 @@ mod tests {
         std::fs::write(&path, &source).unwrap();
         let mut editor = Editor::default();
         editor.create(Primitive::Cube);
-        let id = editor.selected.unwrap();
+        let id = editor.selected().unwrap();
         editor
             .apply_operation(Operation::Rename {
                 id,
@@ -1805,13 +1804,16 @@ mod tests {
         editor.name = "human draft".into();
         let before = editor.history.scene().clone();
         let camera = editor.camera.clone();
-        let selected = (editor.selected, editor.selected_path.clone());
+        let selected = (editor.selected(), editor.selected_path().to_vec());
         let fields = (editor.name.clone(), editor.channels.clone());
         let token = editor.scene_token;
         assert!(editor.open_candidate(&path).is_err());
         assert_eq!(editor.history.scene(), &before);
         assert_eq!(editor.camera, camera);
-        assert_eq!((editor.selected, editor.selected_path.clone()), selected);
+        assert_eq!(
+            (editor.selected(), editor.selected_path().to_vec()),
+            selected
+        );
         assert_eq!((editor.name, editor.channels), fields);
         assert_eq!(editor.scene_token, token);
         assert!(editor.history.can_undo() && editor.history.can_redo());
@@ -1849,7 +1851,7 @@ mod tests {
         assert_eq!(editor.files.origin.source_bytes().unwrap().as_ref(), source);
         assert_eq!(editor.files.document_origin(), DocumentOrigin::MayaAscii);
         assert!(!editor.is_dirty() && !editor.history.can_undo());
-        assert!(editor.selected.is_none() && editor.selected_path.is_empty());
+        assert!(editor.selected().is_none() && editor.selected_path().is_empty());
         let view = ViewScene::from_native(editor.history.scene(), 256 * 1024 * 1024).unwrap();
         for point in view.curve_instances()[0].segments().iter().flatten() {
             let ndc = editor
@@ -2125,7 +2127,7 @@ mod tests {
         let saved = std::fs::read(&path).unwrap();
         let mut editor = Editor::default();
         editor.create(Primitive::Cube);
-        let cube = editor.selected.unwrap();
+        let cube = editor.selected().unwrap();
         editor.channels[0] = "2".into();
         let unsaved = dir.path().join("unsaved.mb");
         assert!(!editor.inspect(false).unwrap().save_available);
@@ -2143,7 +2145,7 @@ mod tests {
         editor.open_path(&bad);
         assert_eq!(editor.history.scene(), &before);
         assert_eq!(editor.channels, draft);
-        assert_eq!(editor.selected, Some(cube));
+        assert_eq!(editor.selected(), Some(cube));
         assert!(editor.history.can_undo());
         editor.open_path(&path);
         assert!(editor.files.is_modal());
@@ -2285,7 +2287,7 @@ mod tests {
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
         editor.sync_fields();
         editor.native_operation(Operation::Rename {
-            id: editor.selected.unwrap(),
+            id: editor.selected().unwrap(),
             name: "changed".into(),
         });
         assert!(editor.is_dirty());
