@@ -1,4 +1,4 @@
-use crate::native_scene::{NativeError, NativeScene, ascii, binary};
+use crate::native_scene::{AuthoredDocumentId, NativeError, NativeScene, ascii, binary};
 use crate::scene::{Scene, SceneError};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -25,6 +25,8 @@ pub enum LinkStatus {
 pub struct SourceBaseline {
     bytes: Arc<[u8]>,
     parse_bytes: Arc<[u8]>,
+    #[cfg_attr(not(unix), expect(dead_code, reason = "authored saving is Unix-only"))]
+    authored_document_id: Option<AuthoredDocumentId>,
     metadata: Metadata,
     link: LinkStatus,
     #[cfg(any(unix, windows))]
@@ -284,6 +286,7 @@ pub fn load_native(path: &Path) -> Result<NativeDocument, NativeLoadError> {
     drop(file);
     let source = SourceBaseline {
         parse_bytes: bytes.clone(),
+        authored_document_id: None,
         bytes,
         metadata,
         link,

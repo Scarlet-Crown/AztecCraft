@@ -546,6 +546,7 @@ impl Receipt {
         let baseline = SourceBaseline {
             bytes: self.bytes.clone(),
             parse_bytes: self.parse_bytes.clone(),
+            authored_document_id: None,
             metadata: self.file.metadata().map_err(io_error)?,
             link: LinkStatus::Direct,
             file: self.file.clone(),
