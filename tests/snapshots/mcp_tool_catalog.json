@@ -2115,11 +2115,7 @@
   },
   {
     "name": "save_scene_as",
-<<<<<<< HEAD
     "description": "Save a supported Maya binary scene to a fresh .mb path, or an authored untitled scene to a fresh .ma path, without overwriting; an uncertain prior save is reconciled instead",
-=======
-    "description": "Save a supported Maya binary scene to a fresh .mb path, or on Unix an authored source-free scene (Untitled or previously saved by this editor) to a fresh .ma path, without overwriting. Assigned session materials and unsupported ASCII content refuse before writing. An uncertain prior save is reconciled instead. PROVISIONAL: Maya acceptance is unverified; saved mesh ASCII files cannot currently be reopened by this editor",
->>>>>>> a542bee1613cc3583cbe9e69e8a49d0a04aa99b2
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "additionalProperties": false,
