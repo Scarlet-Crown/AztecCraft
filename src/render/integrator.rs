@@ -177,18 +177,23 @@ mod tests {
 
         let image = render(&view_scene, &camera, settings);
 
-        // Use a temporary directory for the test
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("demo_render_path_traced.ppm");
-        image.save_ppm(&path, settings.samples).unwrap();
-
-        // Verify that the file has been created and is not empty
-        let metadata = std::fs::metadata(&path).unwrap();
-        assert!(metadata.len() > 0);
-
-        println!(
-            "Imagen Path Traced guardada en: {:?}",
-            path.canonicalize().unwrap()
-        );
+        // If the environment variable is defined, we save there to be able to inspect it.
+        // If not, we use a temporary directory to avoid cluttering the repository (CI).
+        if let Ok(path_str) = std::env::var("AZTECCRAFT_RENDER_OUTPUT") {
+            let path = std::path::PathBuf::from(path_str);
+            image.save_ppm(&path, settings.samples).unwrap();
+            println!(
+                "Imagen Path Traced guardada en: {:?}",
+                path.canonicalize().unwrap()
+            );
+        } else {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("demo_render_path_traced.ppm");
+            image.save_ppm(&path, settings.samples).unwrap();
+            let metadata = std::fs::metadata(&path).unwrap();
+            assert!(metadata.len() > 0);
+            // Print the path to the temporary file for debugging.
+            println!("Imagen temporal Path Traced guardada en: {:?}", path);
+        }
     }
 }
