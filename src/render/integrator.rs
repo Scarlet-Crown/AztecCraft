@@ -41,23 +41,48 @@ fn trace_path(scene: &ViewScene, ray: &super::ray::Ray, depth: u32, seed: &mut u
         // 1. Direct lighting (hardcoded point light)
         let light_pos = Vec3::new(3.0, 5.0, 3.0);
         let light_color = Vec3::new(1.0, 1.0, 1.0);
-        let to_light = (light_pos - hit.point).normalize();
-        let diffuse = hit.normal.dot(to_light).max(0.0);
-        color += hit.albedo * light_color * diffuse;
+        let to_light = light_pos - hit.point;
+        let distance_to_light = to_light.length();
+        let light_dir = to_light / distance_to_light;
+
+        // Shadow ray: check if there is something between the point and the light
+        let shadow_ray = super::ray::Ray {
+            origin: hit.point + hit.normal * 0.001, // Offset for self-intersection
+            direction: light_dir,
+        };
+        let in_shadow = if let Some(shadow_hit) = intersect(scene, &shadow_ray) {
+            (shadow_hit.point - hit.point).length() < distance_to_light
+        } else {
+            false
+        };
+
+        if !in_shadow {
+            let diffuse = hit.normal.dot(light_dir).max(0.0);
+            color += hit.albedo * light_color * diffuse;
+        }
 
         // 2. Indirect lighting (bounces)
+        let normal = if hit.normal.dot(ray.direction) < 0.0 {
+            hit.normal
+        } else {
+            -hit.normal
+        };
+
+        // Generate a random direction in the hemisphere oriented by the normal
         let mut next_dir = random_unit_vector(seed);
-        if next_dir.dot(hit.normal) < 0.0 {
-            next_dir = -next_dir; // Secure the next direction to be in the hemisphere of the normal
+        if next_dir.dot(normal) < 0.0 {
+            next_dir = -next_dir;
         }
+
         let next_ray = super::ray::Ray {
-            origin: hit.point,
+            origin: hit.point + normal * 0.001,
             direction: next_dir,
         };
 
-        // Avoid infinite recursion by probabilistically terminating the path based on the albedo
+        // Russian Roulette: probabilistically terminate the path to avoid infinite recursion
         let p = hit.albedo.max_element().clamp(0.1, 1.0);
         if rand_f32(seed) < p {
+            // For cosine-weighted sampling, the contribution is albedo * L (without dividing by PI)
             color += hit.albedo * trace_path(scene, &next_ray, depth - 1, seed) / p;
         }
 
@@ -117,13 +142,11 @@ mod tests {
     use super::*;
     use crate::native_scene::NativeScene;
     use crate::scene::Primitive;
-    use std::path::PathBuf;
 
     #[test]
     fn render_demo_cube() {
         let mut scene = NativeScene::default();
 
-        // 1. Create the floor and scale it to 10x10
         let floor_id = scene.create(Primitive::Plane, "floor").unwrap();
         let floor_transform = crate::native_scene::NativeTransform {
             scale: [10.0, 1.0, 10.0],
@@ -131,7 +154,6 @@ mod tests {
         };
         scene.set_transform(floor_id, floor_transform).unwrap();
 
-        // 2. Create the cube and elevate it so it rests on the floor
         let cube_id = scene.create(Primitive::Cube, "my_cube").unwrap();
         let cube_transform = crate::native_scene::NativeTransform {
             translation: [0.0, 0.5, 0.0],
@@ -139,27 +161,30 @@ mod tests {
         };
         scene.set_transform(cube_id, cube_transform).unwrap();
 
-        // 3. Convert to ViewScene
         let view_scene = ViewScene::from_native(&scene, 1024 * 1024).unwrap();
 
-        // 4. Configure the camera (closer to see the detail)
         let mut camera = Camera::default();
-        // Move the camera to see the shadow well
         camera
             .set_pose(Vec3::new(0.0, 1.0, 0.0), 6.0, 0.5, 0.3)
             .unwrap();
 
-        // 5. Render at 512x512 (taking advantage of Rayon)
         let settings = RenderSettings {
-            width: 512,
-            height: 512,
-            samples: 50,
+            width: 256,
+            height: 256,
+            samples: 10,
             max_depth: 3,
         };
 
         let image = render(&view_scene, &camera, settings);
-        let path = PathBuf::from("demo_render_path_traced.ppm");
+
+        // Use a temporary directory for the test
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("demo_render_path_traced.ppm");
         image.save_ppm(&path, settings.samples).unwrap();
+
+        // Verify that the file has been created and is not empty
+        let metadata = std::fs::metadata(&path).unwrap();
+        assert!(metadata.len() > 0);
 
         println!(
             "Imagen Path Traced guardada en: {:?}",
